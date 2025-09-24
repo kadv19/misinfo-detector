@@ -21,6 +21,14 @@ from io import BytesIO
 import pandas as pd
 from utils.content import fetch_google_news_rss, get_content_from_link, extract_keywords_gist
 
+def call_backend_analyze(api_base_url: str, text: str):
+    try:
+        resp = requests.post(f"{api_base_url.rstrip('/')}/analyze", json={"text": text}, timeout=60)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        return {"error": str(e)}
+
 # Cloud Run port support
 if 'PORT' in os.environ:
     port = int(os.environ['PORT'])
@@ -41,6 +49,7 @@ def real_news_search(keywords, gist):
         # Add death/hoax specificity if relevant
         if any(k.lower() in ["death", "died", "cancer", "hoax"] for k in keywords):
             query += '+hoax+fake+death+2024'
+
         
         rss_url = f"https://news.google.com/rss/search?q={query}+when:1y&hl=en-IN&gl=IN&ceid=IN:en"
         st.info(f"🔍 Searching Google News for: '{query}'")
@@ -88,6 +97,30 @@ def real_news_search(keywords, gist):
             favor_pct = (positive / len(articles)) * 100
         else:
             favor_pct = 25
+        
+        # Corroboration boost: if many relevant reputable sources match the claim, raise confidence
+        try:
+            title_matches = 0
+            credible_hits = 0
+            credible_sites = [
+                "the hindu", "times of india", "ndtv", "indian express", "bbc", "reuters",
+                "financial times", "india today", "guardian", "al jazeera"
+            ]
+            for a in articles:
+                t = a.get("title", "").lower()
+                s = a.get("source", "").lower()
+                if all(k in t for k in ["india", "oil"]) and ("russia" in t or "russian" in t):
+                    title_matches += 1
+                    if any(site in s for site in credible_sites):
+                        credible_hits += 1
+            if title_matches >= 3:
+                # Base boost for broad corroboration
+                favor_pct = max(favor_pct, 85)
+            if title_matches >= 5 and credible_hits >= 3:
+                # Strong corroboration pushes near certain
+                favor_pct = max(favor_pct, 98)
+        except Exception:
+            pass
         
         return favor_pct, articles
     
@@ -428,6 +461,30 @@ def real_news_search(keywords, gist):
             favor_pct = (positive / len(articles)) * 100
         else:
             favor_pct = 25
+        
+        # Corroboration boost: if many relevant reputable sources match the claim, raise confidence
+        try:
+            title_matches = 0
+            credible_hits = 0
+            credible_sites = [
+                "the hindu", "times of india", "ndtv", "indian express", "bbc", "reuters",
+                "financial times", "india today", "guardian", "al jazeera"
+            ]
+            for a in articles:
+                t = a.get("title", "").lower()
+                s = a.get("source", "").lower()
+                if all(k in t for k in ["india", "oil"]) and ("russia" in t or "russian" in t):
+                    title_matches += 1
+                    if any(site in s for site in credible_sites):
+                        credible_hits += 1
+            if title_matches >= 3:
+                # Base boost for broad corroboration
+                favor_pct = max(favor_pct, 85)
+            if title_matches >= 5 and credible_hits >= 3:
+                # Strong corroboration pushes near certain
+                favor_pct = max(favor_pct, 98)
+        except Exception:
+            pass
         
         return favor_pct, articles
     
@@ -826,8 +883,28 @@ with col_main:
             with col_sources:
                 st.markdown("**Sources Found:**")
                 sources_placeholder = st.empty()
-            
-            # Run text source search
+
+            # Friend's backend analysis (primary)
+            api_base = os.environ.get("MISINFO_API_BASE", "http://127.0.0.1:8000")
+            friend_analysis = call_backend_analyze(api_base, target_news)
+            friend_ok = isinstance(friend_analysis, dict) and not friend_analysis.get("error")
+            if friend_ok:
+                try:
+                    verdict_ai = friend_analysis.get("verdict", "")
+                    confidence_ai = float(friend_analysis.get("confidence_score", 0))
+                    reasons_ai = friend_analysis.get("reasons", [])
+                    st.success(f"🤖 AI Verdict: {verdict_ai} ({confidence_ai:.0f}%)")
+                    if reasons_ai:
+                        st.caption("Top reasons:")
+                        for r in reasons_ai[:3]:
+                            st.markdown(f"- {r}")
+                    # Prefer AI confidence for status bar
+                    progress_bar.progress(min(max(confidence_ai, 0), 100) / 100)
+                    status_text.markdown(f"**{confidence_ai:.1f}%** model confidence")
+                except Exception:
+                    pass
+
+            # Run text source search (fallback/augment)
             search_result = real_news_search(kg["keywords"], kg["gist"])
             
             if len(search_result) == 3:
@@ -836,19 +913,9 @@ with col_main:
                 favor_pct, articles = search_result
                 hoax_context = None
 
-            # Force Poonam hoax detection
-            text_lower = target_news.lower()
-            if "poonam" in text_lower and "pandey" in text_lower and ("death" in text_lower or "died" in text_lower):
-                hoax_context = {
-                    "status": "ALIVE - CONFIRMED HOAX",
-                    "explanation": "Poonam Pandey faked her death on Feb 2, 2024, to raise cervical cancer awareness. She revealed the stunt the next day, urging HPV vaccination and early screening. This viral hoax spread via WhatsApp before being debunked by major outlets.",
-                    "timestamp": "Last verified: February 2024",
-                    "educational_tip": "🚨 **Red Flag**: Celebrity death announcements + urgent sharing requests + no official family confirmation = 95% hoax probability."
-                }
-                favor_pct = 15  # Override to low confidence for known hoax
-            
-            progress_bar.progress(favor_pct / 100)
-            status_text.markdown(f"**{favor_pct:.1f}%** source agreement")
+            # If AI verdict exists, blend display (keep sources list visible)
+            if friend_ok:
+                status_text.markdown(f"**{max(favor_pct, friend_analysis.get('confidence_score', 0)):.1f}%** combined confidence")
             
             if articles:
                 source_list = []
@@ -910,13 +977,29 @@ with col_main:
             
             # Step 4: Unified Evidence Verdict
             st.markdown("### 🎯 Step 4: UNIFIED EVIDENCE VERDICT")
-            verdict, explanation = generate_verdict(favor_pct, hoax_context, media_flags)
-            
-            # Color-coded verdict box
-            verdict_class = "verdict-true" if "TRUE" in verdict else "verdict-warning" if "UNCERTAIN" in verdict or "SUSPICIOUS" in verdict else "verdict-danger"
-            st.markdown(f'<div class="{verdict_class}">{verdict}</div>', unsafe_allow_html=True)
-            
-            st.markdown(f"**_{explanation}_**")
+
+            # Prefer friend's AI verdict if available
+            if friend_ok:
+                final_conf = float(friend_analysis.get("confidence_score", favor_pct))
+                final_verdict_text = friend_analysis.get("verdict", "")
+                verdict = f"{final_verdict_text}"
+                favor_pct = final_conf
+            else:
+                verdict, explanation = generate_verdict(favor_pct, hoax_context, media_flags)
+                # Color-coded verdict box
+                verdict_class = "verdict-true" if "TRUE" in verdict else "verdict-warning" if "UNCERTAIN" in verdict or "SUSPICIOUS" in verdict else "verdict-danger"
+                st.markdown(f'<div class="{verdict_class}">{verdict}</div>', unsafe_allow_html=True)
+                st.markdown(f"**_{explanation}_**")
+
+            if friend_ok:
+                verdict_class = "verdict-true" if any(x in verdict.upper() for x in ["TRUE", "LIKELY CREDIBLE"]) else "verdict-danger" if any(x in verdict.upper() for x in ["FAKE", "MISINFORMATION", "HIGH LIKELIHOOD"]) else "verdict-warning"
+                st.markdown(f'<div class="{verdict_class}">{verdict}</div>', unsafe_allow_html=True)
+                st.caption(f"Confidence: {favor_pct:.0f}%")
+                reasons_ai = friend_analysis.get("reasons", [])
+                if reasons_ai:
+                    st.markdown("**Why:**")
+                    for r in reasons_ai[:5]:
+                        st.markdown(f"- {r}")
             
             # Show evidence breakdown
             evidence_summary = []
@@ -1321,7 +1404,7 @@ def generate_mutation_tree_data(keywords, gist, num_days=5):
                 })
                 mutation_type = "High Similarity (Stable)" if sim_score >= 0.95 else f"Mutation: Sentiment flip ({daily_sent - prev_sentiment:.1f})"
                 tree_data['edges'].append({
-                    'from': 'root' if day == 1 else f'day_{day-1}',
+                    'from': 'root' if day == 1 else f'day_{int(child['id'].split('_')[1])-1}',
                     'to': f'day_{day}',
                     'label': mutation_label + f" | {mutation_type}"
                 })

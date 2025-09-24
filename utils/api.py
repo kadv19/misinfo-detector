@@ -1,19 +1,23 @@
 from fastapi import HTTPException
 import requests
 import json
+import os
 from utils.content import get_content_from_link
 
 #API KEY DECLARATION
-GEMINI_API_KEY = "AIzaSyDH06vyJHu3GpKWg2Hqjp-on0vD4mjjI7o"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 
 #Function definition
 def generate_gemini_response(user_text, news_articles):
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="Missing GEMINI_API_KEY in environment.")
+
     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
     
     # Construct a detailed prompt
     articles_context = "\n".join([
-        f"Source: {article['source']}\nTitle: {article['title']}\nExcerpt: {get_content_from_link(article['link'])}"
+        f"Source: {article.get('source', 'Unknown')}\nTitle: {article.get('title', 'No title')}\nExcerpt: {get_content_from_link(article.get('link') or article.get('url', '#'))}"
         for article in news_articles
     ])
 
@@ -85,11 +89,20 @@ def generate_gemini_response(user_text, news_articles):
     }
 
     try:
-        response = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"})
+        response = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
         response.raise_for_status()
         
         # Parse the JSON string from the response
-        json_string = response.json()['candidates'][0]['content']['parts'][0]['text']
+        body = response.json()
+        candidates = body.get('candidates', [])
+        if not candidates:
+            raise HTTPException(status_code=502, detail="AI service returned no candidates.")
+        parts = candidates[0].get('content', {}).get('parts', [])
+        if not parts:
+            raise HTTPException(status_code=502, detail="AI service returned no parts.")
+        json_string = parts[0].get('text', '')
+        if not json_string:
+            raise HTTPException(status_code=502, detail="AI service returned empty text.")
         return json.loads(json_string)
         
     except requests.exceptions.RequestException as e:
@@ -97,5 +110,8 @@ def generate_gemini_response(user_text, news_articles):
         raise HTTPException(status_code=500, detail="Error communicating with AI service.")
     except (KeyError, json.JSONDecodeError) as e:
         print(f"Error parsing Gemini response: {e}")
-        print(f"Raw Gemini response was: {response.text}")
+        try:
+            print(f"Raw Gemini response was: {response.text}")
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail="Invalid response from AI service.")
