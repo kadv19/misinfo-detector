@@ -1,5 +1,4 @@
 import streamlit as st
-import google.generativeai as genai
 from textblob import TextBlob
 import json
 import feedparser
@@ -13,78 +12,23 @@ import tempfile
 import networkx as nx
 from pyvis.network import Network
 import os
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from difflib import SequenceMatcher
+import numpy as np
+import matplotlib.pyplot as plt
+from io import BytesIO
+import pandas as pd
+from utils.content import fetch_google_news_rss, get_content_from_link, extract_keywords_gist
 
+# Cloud Run port support
+if 'PORT' in os.environ:
+    port = int(os.environ['PORT'])
+else:
+    port = 8501
 # Configure Gemini - Get your FREE API key from ai.google.dev
-GEMINI_API_KEY = "AIzaSyCvkXXU_CjSaIjFrGO4QeL7nTlew3qW0-I"  # Update with your real key!
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
 
-@st.cache_data(ttl=300)
-def extract_keywords_gist(text):
-    """Extract keywords and gist from target news using Gemini - tuned for actions like 'death'"""
-    try:
-        prompt = f"""
-        Analyze this news text and extract:
-        1. 5-8 key entities/keywords (names, locations, events, medical terms, key actions like 'death', 'died', 'hoax', 'cancer')
-        2. One sentence gist/summary of the core claim - include if it's a death announcement or hoax
-        
-        News: "{text}"
-        
-        Prioritize action words like 'death', 'died', 'fake', 'hoax' as separate entities.
-        
-        Respond in clean JSON format only:
-        {{
-            "keywords": ["Poonam Pandey", "death", "cervical cancer", "hoax", "Bollywood", "actress"],
-            "gist": "One sentence summary of the main claim here."
-        }}
-        """
-        response = model.generate_content(prompt)
-        content = response.text.strip()
-        
-        if '{' in content and '}' in content:
-            start = content.find('{')
-            end = content.rfind('}') + 1
-            json_str = content[start:end]
-            parsed = json.loads(json_str)
-            keywords = parsed.get("keywords", text.split()[:5])
-            # Force "death" if present in text but not in keywords
-            text_lower = text.lower()
-            if any(word in text_lower for word in ["death", "died", "passed", "dead", "found dead"]):
-                if not any("death" in k.lower() for k in keywords):
-                    keywords = ["death"] + keywords
-            return {
-                "keywords": keywords,
-                "gist": parsed.get("gist", f"Claim about {', '.join(text.split()[:3])}")
-            }
-        else:
-            lines = content.split('\n')
-            keywords = []
-            gist = ""
-            for line in lines:
-                if line.strip().startswith('keywords') or line.strip().startswith('["'):
-                    words = [w.strip('",') for w in line.split(',') if w.strip()]
-                    keywords.extend(words[:8])
-                elif line.strip().startswith('gist') or len(line.split()) > 5:
-                    gist = line.strip()
-            keywords = list(set(keywords))[:8] if keywords else text.split()[:5]
-            text_lower = text.lower()
-            if any(word in text_lower for word in ["death", "died", "passed", "dead", "found dead"]):
-                if not any("death" in k.lower() for k in keywords):
-                    keywords = ["death"] + keywords
-            return {
-                "keywords": keywords,
-                "gist": gist or f"Analysis of news about {text[:50]}..."
-            }
-    except Exception as e:
-        st.error(f"AI Analysis hiccup: {e}")
-        text_lower = text.lower()
-        keywords = text.split()[:5]
-        if any(word in text_lower for word in ["death", "died", "passed", "dead", "found dead", "cancer"]):
-            keywords = ["death", "Poonam Pandey", "cervical cancer", "hoax", "actress"]
-        return {
-            "keywords": keywords,
-            "gist": f"A {', '.join(keywords[:2])} announcement is being circulated."
-        }
+
 
 def real_news_search(keywords, gist):
     """Real Google News search - tuned for relevance"""
@@ -152,138 +96,105 @@ def real_news_search(keywords, gist):
         return fallback_smart_search(keywords, gist)
 
 def build_claim_lineage_graph(keywords, verdict, favor_pct, articles, media_flags=None, hoax_context=None):
-    """Build interactive graph with clickable news links on nodes"""
+    """Dynamic interactive graph for any news - auto-adapts entities/sources"""
     try:
         from networkx import Graph
         from pyvis.network import Network
         import tempfile
+        from difflib import SequenceMatcher
 
         G = Graph()
 
-        # === CENTRAL CHAIN ===
-        G.add_node("origin",
-                   label="🌀 Origin Unknown",
-                   color="#e74c3c",
-                   size=25,
-                   title="Starting point: WhatsApp forward or IG post",
-                   url="https://news.google.com/search?q=poonam+pandey+hoax+origin")
+        # 1. Origin (universal)
+        G.add_node("origin", label="🌀 Origin Unknown", color="#e74c3c", size=25, 
+                   title="Starting point: Social post/forward", 
+                   url="https://news.google.com/search?q=misinformation+origin")
 
-        # Force "death" node
-        death_node = "death"
-        G.add_node(death_node,
-                   label="💀 Death Announcement",
-                   color="#c0392b",
-                   size=22,
-                   title="Key claim: 'Found dead at 32'",
-                   url="https://www.bbc.com/news/world-asia-india-68201524")
-        G.add_edge("origin", death_node, color="#34495e", label="triggers", width=3)
+        # 2. Dynamic Key Action (e.g., "death" for Poonam, "win" for election)
+        key_action = next((kw for kw in keywords if any(term in kw.lower() for term in ["death", "win", "hoax", "fake"])), "claim")
+        G.add_node("action", label=f"🔑 {key_action.upper()}", color="#c0392b", size=22, 
+                   title=f"Core action in claim: {key_action}", 
+                   url=f"https://news.google.com/search?q={key_action}+misinformation")
+        G.add_edge("origin", "action", color="#34495e", label="triggers", width=3)
 
-        # Poonam Pandey node
-        poonam_node = "poonam_pandey"
-        G.add_node(poonam_node,
-                   label="Poonam Pandey",
-                   color="#3498db",
-                   size=24,
-                   title="Victim in hoax claim",
-                   url="https://www.aljazeera.com/news/2024/2/4/indian-model-poonam-pandey-fakes-cervical-cancer-death-triggering-a-row")
-        G.add_edge(death_node, poonam_node, color="#34495e", label="targets", width=3)
+        # 3. Main Entity (first relevant keyword, e.g., "Poonam Pandey")
+        main_entity = keywords[0] if keywords else "unknown"
+        G.add_node("main_entity", label=main_entity, color="#3498db", size=24, 
+                   title=f"Primary subject: {main_entity}", 
+                   url=f"https://news.google.com/search?q={main_entity}+fact+check")
+        G.add_edge("action", "main_entity", color="#34495e", label="targets", width=3)
 
-        # Other entities (e.g., "cervical cancer")
-        other_entities = [kw for kw in keywords if kw.lower() not in ["death", "poonam pandey", "poonam", "pandey"]]
-        for i, entity in enumerate(other_entities[:2]):
-            entity_node = f"entity_{i}"
+        # 4. Other Entities (2-3 from keywords)
+        for i, entity in enumerate(keywords[1:4]):
             color = "#2ecc71" if "cancer" in entity.lower() else "#f39c12"
-            G.add_node(entity_node,
-                       label=entity,
-                       color=color,
-                       size=18,
-                       title=f"Supporting entity: {entity}",
-                       url=f"https://news.google.com/search?q={entity.replace(' ', '+')}+poonam+pandey")
-            G.add_edge(poonam_node, entity_node, color="#95a5a6", label="context", width=2)
+            entity_node = f"entity_{i}"
+            G.add_node(entity_node, label=entity, color=color, size=18, 
+                       title=f"Supporting entity: {entity}", 
+                       url=f"https://news.google.com/search?q={entity}+{main_entity}")
+            G.add_edge("main_entity", entity_node, color="#95a5a6", label="context", width=2)
 
-        # === HOAX NODE (Purple, with Link) ===
-        is_poonam_hoax = any(word in ' '.join(keywords).lower() for word in ["poonam", "pandey", "death"])
-        if is_poonam_hoax or hoax_context:
+        # 5. Hoax Node (if detected or low favor)
+        if hoax_context or favor_pct < 30:
             hoax_node = "hoax_pattern"
-            G.add_node(hoax_node,
-                       label="🎭 Known Hoax",
-                       color="#9b59b6",
-                       size=26,
-                       title="Poonam Pandey faked death for cancer awareness - Feb 2024",
-                       url="https://www.ndtv.com/india-news/we-made-a-mistake-agency-apologies-again-for-poonam-pandeys-fake-death-marketing-stunt-5080055")
-            G.add_edge(poonam_node, hoax_node, color="#9b59b6", label="matches", width=4, dashes=True)
+            G.add_node(hoax_node, label="🎭 Hoax Pattern", color="#9b59b6", size=26, 
+                       title="Matches known misinformation template", 
+                       url="https://news.google.com/search?q=misinformation+hoax+patterns")
+            G.add_edge("main_entity", hoax_node, color="#9b59b6", label="matches", width=4, dashes=True)
 
-        # === SOURCE NODES (With Article Links) ===
-        filtered_articles = [a for a in articles if any(term.lower() in a["title"].lower() or term.lower() in a.get("summary", "").lower()
-                                for term in ["poonam", "pandey", "death", "hoax"])]
-        if not filtered_articles:
-            filtered_articles = articles[:3]
+        # 6. Filtered Sources (relevance >30% to gist/keywords)
+        from difflib import SequenceMatcher
+        filtered_articles = []
+        gist_lower = ""
+        if 'kg' in globals():
+            gist_lower = kg['gist'].lower()
+        for article in articles:
+            relevance = max(
+                SequenceMatcher(None, article["title"].lower(), gist_lower).ratio() if gist_lower else 0,
+                max(SequenceMatcher(None, article["title"].lower(), kw.lower()).ratio() for kw in keywords)
+            )
+            if relevance > 0.3:
+                filtered_articles.append((article, relevance))
 
-        for i, article in enumerate(filtered_articles[:3]):
+        for i, (article, relevance) in enumerate(filtered_articles[:3]):
             sentiment = article["sentiment"]
             color = "#27ae60" if sentiment > 0.1 else "#e74c3c" if sentiment < -0.1 else "#95a5a6"
-            label = article["source"][:10] + "..." if len(article["source"]) > 10 else article["source"]
-            source_title = f"Sentiment {sentiment:.1f}: {article['title'][:40]}"
+            label = article["source"][:10] + "..." 
+            source_title = f"Relevance {relevance:.1%} | Sentiment {sentiment:.1f}"
             source_node = f"source_{i}"
-            G.add_node(source_node,
-                       label=label,
-                       color=color,
-                       size=18,
-                       title=source_title,
+            G.add_node(source_node, label=label, color=color, size=18, 
+                       title=source_title + f"\n{article['title'][:40]}", 
                        url=article.get("url", f"https://news.google.com/search?q={article['source']}"))
-            G.add_edge(poonam_node, source_node, color=color, width=max(1, abs(sentiment)*4), label=f"{sentiment:.1f}")
+            G.add_edge("main_entity", source_node, color=color, width=max(1, abs(sentiment)*4), label=f"{sentiment:.1f}")
 
-        # === VERDICT NODE ===
+        # 7. Verdict Node
         verdict_color = "#27ae60" if "TRUE" in verdict else "#e74c3c" if "FAKE" in verdict or "HOAX" in verdict else "#f39c12"
-        G.add_node("verdict",
-                   label=f"Verdict: {verdict.split(':')[0]}",
-                   color=verdict_color,
-                   size=28,
-                   title=f"{verdict} ({favor_pct:.0f}% confidence)",
-                   url="https://your-gcp-cloud-run-url.com")
-        last_connector = hoax_node if 'hoax_node' in locals() else (f"source_{len(filtered_articles)-1}" if filtered_articles else "origin")
-        G.add_edge(last_connector, "verdict", color="#2c3e50", label="leads to", width=3)
+        G.add_node("verdict", label=f"Verdict: {verdict.split(':')[0]}", color=verdict_color, size=28, 
+                   title=f"{verdict} ({favor_pct:.0f}% confidence)", 
+                   url="https://github.com/kadv19/misinfo-detector")
+        last_connector = hoax_node if 'hoax_node' in locals() else (f"source_{len(filtered_articles)-1}" if filtered_articles else "main_entity")
+        G.add_edge(last_connector, "verdict", color="#2c3e50", label="leads to", width=4)
 
-        # Create PyVis network
-        net = Network(height="400px", width="100%", directed=True)
+        # Render
+        net = Network(height="450px", width="100%", directed=True, bgcolor="#1a1a1a")
         net.from_nx(G)
-        
-        # Styling
         net.set_options("""
         {
-          "nodes": {
-            "font": {"size": 12},
-            "borderWidth": 1,
-            "shadow": true
-          },
-          "edges": {
-            "arrows": "to",
-            "smooth": {"type": "continuous"}
-          },
-          "physics": {
-            "enabled": true,
-            "barnesHut": {
-              "springLength": 150
-            }
-          }
+          "nodes": {"font": {"size": 14, "color": "#ffffff"}, "borderWidth": 2, "shadow": true},
+          "edges": {"arrows": "to", "color": {"inherit": false}, "font": {"size": 10}, "smooth": {"type": "continuous"}},
+          "physics": {"enabled": true, "barnesHut": {"springLength": 120}},
+          "interaction": {"hover": true, "tooltipDelay": 150}
         }
         """)
-        
-        # Save to temp file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
         net.save_graph(temp_file.name)
-        
-        # Read HTML
         with open(temp_file.name, 'r', encoding='utf-8') as f:
             graph_html = f.read()
-        
         import os
         os.unlink(temp_file.name)
-        
         return graph_html
-        
+
     except Exception as e:
-        print(f"Graph build error: {e}")  # Terminal debug
+        print(f"Graph build error: {e}")
         return None
 def create_lineage_summary(keywords, verdict, favor_pct, articles, media_flags):
     """Create text-based lineage summary for non-interactive fallback"""
@@ -1115,7 +1026,7 @@ with col_main:
                     st.info("Graph shows rumor evolution: Origin → Entities → Sources → Verdict")
                     
             except Exception as e:
-                st.error(f"Graph error (fallback active): {str(e)[:80]}")
+                st.error(f"Graph build error: {e}")  # Terminal debug
                 st.info("Using text-based lineage summary...")
                 
                 # Simple fallback summary
@@ -1215,12 +1126,248 @@ with st.expander("🔧 Debug & Developer Info"):
     }
     st.json(debug_data)
 
-# Cloud Run port support
-if 'PORT' in os.environ:
-    port = int(os.environ['PORT'])
-else:
-    port = 8501
+
 
 if __name__ == "__main__":
     # For Cloud Run deployment
     st.write("Deployed on Google Cloud Run!")
+
+def generate_mutation_graph(keywords, gist, num_days=5):
+    """Generate time-series mutation graph over N days"""
+    try:
+        vectorizer = TfidfVectorizer(stop_words='english')
+        gist_vec = vectorizer.fit_transform([gist.lower()])
+
+        days = []
+        sentiments = []
+        mutations = []
+
+        for day in range(1, num_days + 1):
+            query = ' '.join(keywords[:3]) + f' when:{day}d'
+            daily_articles = real_news_search([query], gist)
+            daily_sent = daily_articles[0] if daily_articles[1] else 0.5
+            daily_gist = " ".join([a["summary"] for a in daily_articles[1][:2]]) if daily_articles[1] else ""
+            daily_vec = vectorizer.transform([daily_gist.lower()])
+            sim_score = cosine_similarity(gist_vec, daily_vec)[0][0] if daily_gist else 0
+
+            days.append(f"Day {day}")
+            sentiments.append(daily_sent)
+            mutations.append(sim_score * 100)
+
+            if sim_score < 0.89:
+                st.warning(f"Day {day}: Mutation detected (Similarity: {sim_score:.1%})")
+
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        ax1.plot(days, sentiments, marker='o', color='blue', linewidth=2, label='Sentiment Score')
+        ax1.set_ylabel('Sentiment (-1 Fake to +1 True)', color='blue')
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax1.set_ylim(-1, 1)
+
+        ax2 = ax1.twinx()
+        ax2.bar(days, mutations, alpha=0.6, color='red', label='Mutation Similarity %')
+        ax2.set_ylabel('Gist Similarity to Original (%)', color='red')
+        ax2.set_ylim(0, 100)
+        ax2.tick_params(axis='y', labelcolor='red')
+
+        plt.title('News Mutation Over Time: How the Claim Evolved', fontsize=14, fontweight='bold')
+        fig.legend(loc='upper left', bbox_to_anchor=(0.1, 0.9))
+        plt.xticks(rotation=45)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+
+        return buf.getvalue(), days, sentiments, mutations
+
+    except Exception as e:
+        st.error(f"Mutation graph error: {e}")
+        return None, [], [], []
+
+def display_mutation_graph(mutation_data):
+    """Display the mutation graph in app"""
+    if mutation_data[0] is None:
+        st.warning("Mutation analysis unavailable - showing summary")
+        st.info("News mutation tracks how claims evolve: Day 1 - Initial claim, Day 2 - Media pickup, Day 3 - Fact-checking, etc.")
+        return
+    
+    buf, days, sentiments, mutations = mutation_data
+    
+    # Display the image
+    st.image(buf, caption="News Mutation Graph", use_column_width=True)
+    
+    # Table of values
+    st.markdown("**Mutation Data Table:**")
+    mutation_df = pd.DataFrame({
+        "Day": days,
+        "Sentiment Score": sentiments,
+        "Mutation Similarity %": mutations
+    })
+    st.write(mutation_df)
+
+def render_mutation_tree(tree_data):
+    """Render tree as interactive PyVis hierarchy"""
+    try:
+        from networkx import Graph
+        from pyvis.network import Network
+        import tempfile
+        
+        G = Graph()
+        
+        # Add root
+        root = tree_data['root']
+        G.add_node("root", label=root['label'], color=root['color'], size=30, 
+                   title=root['title'], url=root.get('url', ''))
+        
+        # Add children and edges
+        for child in tree_data['children']:
+            child_id = child['id']
+            G.add_node(child_id, label=child['label'], color=child['color'], size=20, 
+                       title=child['title'], url=child.get('url', ''))
+            G.add_edge("root", child_id, label="Evolves to", color="#34495e")
+        
+        # Add mutation edges between children
+        for edge in tree_data['edges']:
+            from_node = edge['from']
+            to_node = edge['to']
+            if from_node != "root":
+                G.add_edge(from_node, to_node, label=edge['label'], color="#9b59b6", dashes=True)
+        
+        net = Network(height="500px", width="100%", directed=True, layout=True)
+        net.from_nx(G)
+        net.set_options("""
+        {
+          "layout": {
+            "hierarchical": {
+              "enabled": true,
+              "direction": "UD",
+              "sortMethod": "directed",
+              "levelSeparation": 250,
+              "nodeSpacing": 200
+            }
+          },
+          "nodes": {"font": {"size": 12}, "shape": "box", "borderWidth": 2},
+          "edges": {"arrows": "to", "font": {"size": 10}, "color": {"inherit": "from"}},
+          "physics": {"enabled": false},
+          "interaction": {"hover": true, "clickToUse": true}
+        }
+        """)
+        
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
+        net.save_graph(temp_file.name)
+        with open(temp_file.name, 'r', encoding='utf-8') as f:
+            graph_html = f.read()
+        import os
+        os.unlink(temp_file.name)
+        
+        return graph_html
+        
+    except Exception as e:
+        st.error(f"Tree render error: {e}")
+        return None
+
+# Step 7: Mutation Graph
+st.markdown("### 📈 Step 7: NEWS MUTATION TRACKER")
+st.markdown("*How this claim evolved over time (5-day analysis)*")
+
+if 'kg' in locals() and kg and "keywords" in kg and "gist" in kg:
+    with st.expander("🔍 View Time-Series Mutation Graph", expanded=False):
+        mutation_data = generate_mutation_graph(kg["keywords"], kg["gist"])
+        display_mutation_graph(mutation_data)
+    st.caption("Mutation = Gist similarity <89% from original—tracks hoax evolution!")
+else:
+    st.info("Run an analysis above to view the mutation tracker.")
+
+def generate_mutation_tree_data(keywords, gist, num_days=5):
+    """Generate tree data: Original root + daily mutated children with mutation labels"""
+    try:
+        vectorizer = TfidfVectorizer(stop_words='english')
+        gist_vec = vectorizer.fit_transform([gist.lower()])
+        
+        tree_data = {
+            'root': {'label': f"Original Claim: {gist[:50]}...", 'color': 'green', 'title': 'Day 0: User Input'},
+            'children': [],
+            'edges': []
+        }
+        
+        prev_sentiment = 0.5  # Neutral start
+        prev_gist = gist
+        
+        for day in range(1, num_days + 1):
+            query = ' '.join(keywords[:3]) + f' when:{day}d'
+            daily_result = real_news_search(keywords, gist.replace('when:', ''))
+            daily_articles = daily_result[1] if len(daily_result) > 1 else []
+            
+            if not daily_articles:
+                # Mock for demo if no results
+                daily_articles = [{'title': f'Day {day} Mutation: {keywords[0]} hoax confirmed', 'sentiment': prev_sentiment - 0.2, 'summary': f'Mutated version of {gist[:30]}...'}]
+            
+            daily_sent = np.mean([a['sentiment'] for a in daily_articles]) if daily_articles else 0.5
+            daily_gist = " ".join([a['summary'] for a in daily_articles[:2]])
+            daily_vec = vectorizer.transform([daily_gist.lower()])
+            sim_score = cosine_similarity(gist_vec, daily_vec)[0][0]
+            
+            if sim_score >= 0.89:
+                mutation_label = f"Day {day}: Similarity {sim_score:.1%}"
+                mutation_title = f"Sentiment: {daily_sent:.1f} | Change: {daily_sent - prev_sentiment:.1f}"
+                tree_data['children'].append({
+                    'id': f'day_{day}',
+                    'label': f"Mutated: {daily_gist[:30]}...",
+                    'color': 'orange' if sim_score < 0.95 else 'blue',
+                    'title': mutation_title,
+                    'url': daily_articles[0].get('url', '') if daily_articles else ''
+                })
+                mutation_type = "High Similarity (Stable)" if sim_score >= 0.95 else f"Mutation: Sentiment flip ({daily_sent - prev_sentiment:.1f})"
+                tree_data['edges'].append({
+                    'from': 'root' if day == 1 else f'day_{day-1}',
+                    'to': f'day_{day}',
+                    'label': mutation_label + f" | {mutation_type}"
+                })
+                prev_sentiment = daily_sent
+                prev_gist = daily_gist
+        
+        return tree_data
+        
+    except Exception as e:
+        st.error(f"Tree data error: {e}")
+        return {'root': {'label': 'Original Claim'}, 'children': [], 'edges': []}
+
+# === ADDITIONAL ANALYSIS: MUTATION TREE ===
+st.markdown("---")
+st.markdown("### 🌳 Step 8: CLAIM MUTATION TREE")
+st.markdown("*Visualize how the claim has mutated over time*")
+
+if 'kg' in locals() and kg and "keywords" in kg and "gist" in kg:
+    with st.expander("🔍 View Claim Mutation Tree", expanded=False):
+        tree_data = generate_mutation_tree_data(kg["keywords"], kg["gist"])
+        
+        # Display the tree using Pyvis
+        if tree_data and tree_data['children']:
+            net = Network(height="500px", width="100%", directed=True, bgcolor="#1a1a1a")
+            
+            # Add root node
+            net.add_node("root", label=tree_data['root']['label'], title=tree_data['root']['title'], 
+                         color=tree_data['root']['color'], size=30)
+            
+            # Add child nodes and edges
+            for child in tree_data['children']:
+                net.add_node(child['id'], label=child['label'], title=child['title'], 
+                             color=child['color'], size=20)
+                net.add_edge("root" if child['id'] == "day_1" else f"day_{int(child['id'].split('_')[1])-1}", 
+                             child['id'], 
+                             label="", 
+                             color="#95a5a6", 
+                             width=2)
+            
+            # Show the network graph
+            net.show_buttons(filter_=['physics'])
+            graph_html = net.generate_html()
+            st.components.v1.html(graph_html, height=550, width=700)
+            
+            st.success("✅ **Mutation Tree Active!** Explore how the claim evolved.")
+        else:
+            st.info("No mutations detected - claim appears stable.")
+else:
+    st.info("Run an analysis above to view the mutation tree.")
