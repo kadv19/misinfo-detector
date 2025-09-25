@@ -1107,7 +1107,7 @@ st.markdown(
     """
     <div style='text-align: center; color: #666; padding: 1rem;'>
         <p><strong>Built with ❤️ using Google Cloud's Gen AI Stack</strong></p>
-        <p>Multi-modal Evidence Analysis | Team: [Your Names] | Gen AI Exchange Hackathon 2025</p>
+        <p>Multi-modal Evidence Analysis | Team: CODESURFERS | Gen AI Exchange Hackathon 2025</p>
         <p><em>Text + Image + Video + Web Source Verification</em></p>
     </div>
     """, 
@@ -1371,3 +1371,4 @@ if 'kg' in locals() and kg and "keywords" in kg and "gist" in kg:
             st.info("No mutations detected - claim appears stable.")
 else:
     st.info("Run an analysis above to view the mutation tree.")
+
