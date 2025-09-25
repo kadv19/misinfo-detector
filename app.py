@@ -616,6 +616,19 @@ with st.sidebar:
     """)
     
     st.markdown("---")
+    st.header("🔌 Backend Settings")
+    # Determine default API base from secrets or env
+    default_api_base = None
+    try:
+        default_api_base = st.secrets.get("MISINFO_API_BASE", None)  # type: ignore[attr-defined]
+    except Exception:
+        default_api_base = None
+    if not default_api_base:
+        default_api_base = os.environ.get("MISINFO_API_BASE", "http://127.0.0.1:8000")
+    api_base_input = st.text_input("Backend API base", value=default_api_base, help="Your FastAPI backend URL (e.g., https://misinfo-backend-xxxx.a.run.app)")
+    st.session_state["api_base"] = api_base_input
+    
+    st.markdown("---")
     st.header("🛠 Tech Stack")
     st.markdown("""
     • **Google Gemini** - Multi-modal AI Analysis  
@@ -798,7 +811,7 @@ with col_main:
                 sources_placeholder = st.empty()
 
             # Friend's backend analysis (primary)
-            api_base = os.environ.get("MISINFO_API_BASE", "http://127.0.0.1:8000")
+            api_base = st.session_state.get("api_base") or os.environ.get("MISINFO_API_BASE", "http://127.0.0.1:8000")
             friend_analysis = call_backend_analyze(api_base, target_news)
             friend_ok = isinstance(friend_analysis, dict) and not friend_analysis.get("error")
             ai_confidence = None
@@ -1331,7 +1344,7 @@ def generate_mutation_tree_data(keywords, gist, num_days=5):
                 })
                 mutation_type = "High Similarity (Stable)" if sim_score >= 0.95 else f"Mutation: Sentiment flip ({daily_sent - prev_sentiment:.1f})"
                 tree_data['edges'].append({
-                    'from': 'root' if day == 1 else f'day_{day-1}',
+                    'from': 'root' if day == 1 else f'day_{int(child['id'].split('_')[1])-1}',
                     'to': f'day_{day}',
                     'label': mutation_label + f" | {mutation_type}"
                 })
