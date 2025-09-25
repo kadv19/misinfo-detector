@@ -2,6 +2,7 @@ from fastapi import HTTPException
 import requests
 import json
 from utils.content import get_content_from_link
+import time
 
 #API KEY DECLARATION
 GEMINI_API_KEY = "AIzaSyDH06vyJHu3GpKWg2Hqjp-on0vD4mjjI7o"
@@ -22,15 +23,11 @@ def generate_gemini_response(user_text, news_articles):
         **Your Task (All in one step):**
         1. **Analyze the Claim:** First, perform a detailed analysis of the user's claim. Extract key entities, keywords, and the overall sentiment or emotional tone.
         2. **Evaluate External Sources:** Next, analyze the provided list of external news articles. For each article, determine its stance relative to the user's claim, classifying it as 'Supports', 'Conflicts', or 'Neutral'. Pay close attention to the source's reputation, as articles from highly credible sources carry more weight.
-        3. **Calculate Credibility Score:** Based on a neutral starting score of 50, adjust the score using the following logic, ensuring the final score is clamped between 0 and 100:
-        - For every credible source that **supports** the claim, increase the score by 5 points.
-        - For every credible source that **conflicts** with the claim, decrease the score by 10 points.
-        - For every credible source that is **neutral**, do not adjust the score, but recognize that this indicates a lack of strong corroboration.
-        - If the user's original claim contains highly sensational or emotionally charged language, apply a penalty of 10 points to the final score.
-        4. **Determine Verdict and Reasons:** Map the final score to a clear verdict (High Likelihood of Misinformation, Conflicting or Uncorroborated Claims, or Likely Credible). Provide three distinct, evidence-based reasons for your verdict, drawing from your analysis of the sources.Provide atleast 5 reasons
+        3. **Calculate Credibility Score:** Based on the collective sentiment of the analyzed sources, determine a confidence score on a scale of 0 to 100. If multiple credible sources strongly support the claim, the score should be high (e.g., 80-100). If they strongly conflict, the score should be low (e.g., 0-20). If sources are mixed or inconclusive, the score should be around 50. If the claim is based on sensational or emotionally charged language, apply a penalty of 10-20 points to the final score.
+        4. **Determine Verdict and Reasons:** Map the final score to a clear verdict (High Likelihood of Misinformation, Conflicting or Uncorroborated Claims, or Likely Credible). Provide five distinct, evidence-based reasons for your verdict, drawing from your analysis of the sources.
         5. **State the 'What-If':** Conclude the analysis by providing a specific, verifiable type of evidence that would be needed to change the verdict.
         6. **Generate a Visual Data Structure:** Create a 'lineage_graph' JSON object that represents the user's claim and its relationship to the top 4 most relevant articles. Use 'Supports' or 'Conflicts' to describe the link type.
-        7.Also include how did you calculated the confidence score
+        7. Also include how did you calculated the confidence score
         
         **Strict JSON Output:**
         Provide the entire response as a single JSON object. The structure must be exactly as follows. Do not include any other text or markdown outside this JSON object.
@@ -38,33 +35,38 @@ def generate_gemini_response(user_text, news_articles):
         {{
             "verdict": "string",
             "confidence_score": "number",
-            "reasons": ["string", "string", "string"],
+            "reasons": ["string", "string", "string","string", "string"],
             "what_would_change": "string",
-            "lineage_graph": {
+            "lineage_graph": {{
             "claim": "string",
             "connections": [
-                {
+                {{
                     "source": "String",
-                    "url" : "url"
+                    "url" : "url",
                     "title": "String",
                     "link_type": "Supports or Contradict"
-                },
-                {
+                }},
+                {{
                     "source": "String",
-                    "url" : "url"
+                    "url" : "url",
                     "title": "String",
                     "link_type": "Supports or Contradict"
-                },
+                }},
                 
-                {
+                {{
                     "source": "String",
-                    "url" : "url"
+                    "url" : "url",
                     "title": "String",
                     "link_type": "Supports or Contradict"
-                }
-                .......
+                }},
+                {{
+                    "source": "String",
+                    "url" : "url",
+                    "title": "String",
+                    "link_type": "Supports or Contradict"
+                }}
             ]
-        },
+        }},
         "confidence_score_calculation": "String"
 
         }}
