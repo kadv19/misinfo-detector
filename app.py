@@ -403,94 +403,7 @@ def analyze_web_source(url):
     except:
         return {"url": url, "credibility": 0.2, "summary": "Could not access URL"}
 
-def real_news_search(keywords, gist):
-    """Real Google News search - tuned for relevance"""
-    try:
-        from difflib import SequenceMatcher
-        # Build core query
-        query_terms = [kw.replace(' ', '+') for kw in keywords[:3]]
-        query = '+'.join(query_terms)
-        
-        # Add death/hoax specificity if relevant
-        if any(k.lower() in ["death", "died", "cancer", "hoax"] for k in keywords):
-            query += '+hoax+fake+death+2024'
-        
-        rss_url = f"https://news.google.com/rss/search?q={query}+when:1y&hl=en-IN&gl=IN&ceid=IN:en"
-        st.info(f"🔍 Searching Google News for: '{query}'")
-        
-        response = requests.get(rss_url, timeout=15)
-        if response.status_code != 200:
-            raise Exception(f"RSS fetch failed: {response.status_code}")
-        
-        feed = feedparser.parse(response.content)
-        articles = []
-        
-        for entry in feed.entries[:10]:
-            try:
-                title = entry.get('title', 'No title')
-                summary = entry.get('summary', '') or entry.get('description', '')
-                clean_text = BeautifulSoup(str(summary), "html.parser").get_text()
-                text_for_sentiment = (title + " " + clean_text)[:200].strip()
-                if len(text_for_sentiment) > 20:
-                    sentiment = TextBlob(text_for_sentiment).sentiment.polarity
-                    source = "Google News"
-                    if hasattr(entry, 'source') and entry.source:
-                        source = entry.source.get('title', source)
-                    elif ' - ' in title:
-                        source = title.split(' - ')[-1].strip()
-                    articles.append({
-                        "title": title[:80] + "..." if len(title) > 80 else title,
-                        "summary": clean_text[:100] + "...",
-                        "sentiment": sentiment,
-                        "url": entry.get('link', ''),
-                        "source": source
-                    })
-            except:
-                continue
-        
-        # Filter articles for relevance (score >0.2 similarity to gist)
-        filtered_articles = []
-        for article in articles:
-            similarity = SequenceMatcher(None, article["title"].lower(), gist.lower()).ratio()
-            if similarity > 0.2:
-                filtered_articles.append(article)
-        articles = filtered_articles
-        
-        if articles:
-            positive = sum(1 for a in articles if a["sentiment"] > 0.1)
-            favor_pct = (positive / len(articles)) * 100
-        else:
-            favor_pct = 25
-        
-        # Corroboration boost: if many relevant reputable sources match the claim, raise confidence
-        try:
-            title_matches = 0
-            credible_hits = 0
-            credible_sites = [
-                "the hindu", "times of india", "ndtv", "indian express", "bbc", "reuters",
-                "financial times", "india today", "guardian", "al jazeera"
-            ]
-            for a in articles:
-                t = a.get("title", "").lower()
-                s = a.get("source", "").lower()
-                if all(k in t for k in ["india", "oil"]) and ("russia" in t or "russian" in t):
-                    title_matches += 1
-                    if any(site in s for site in credible_sites):
-                        credible_hits += 1
-            if title_matches >= 3:
-                # Base boost for broad corroboration
-                favor_pct = max(favor_pct, 85)
-            if title_matches >= 5 and credible_hits >= 3:
-                # Strong corroboration pushes near certain
-                favor_pct = max(favor_pct, 98)
-        except Exception:
-            pass
-        
-        return favor_pct, articles
-    
-    except Exception as e:
-        st.warning(f"🌐 Search issue (using smart fallback): {str(e)[:100]}")
-        return fallback_smart_search(keywords, gist)
+ 
 
 def fallback_smart_search(keywords, gist):
     """Intelligent fallback with realistic mock data"""
@@ -909,6 +822,8 @@ with col_main:
                         status_text.markdown(f"**{ai_confidence:.1f}%** model confidence")
                 except Exception:
                     pass
+            if not friend_ok:
+                st.warning(f"AI service unavailable: {friend_analysis.get('error','Unknown error')}")    
 
             # Run text source search (fallback/augment)
             search_result = real_news_search(kg["keywords"], kg["gist"])
@@ -1416,7 +1331,7 @@ def generate_mutation_tree_data(keywords, gist, num_days=5):
                 })
                 mutation_type = "High Similarity (Stable)" if sim_score >= 0.95 else f"Mutation: Sentiment flip ({daily_sent - prev_sentiment:.1f})"
                 tree_data['edges'].append({
-                    'from': 'root' if day == 1 else f'day_{int(child['id'].split('_')[1])-1}',
+                    'from': 'root' if day == 1 else f'day_{day-1}',
                     'to': f'day_{day}',
                     'label': mutation_label + f" | {mutation_type}"
                 })
