@@ -90,28 +90,41 @@ def generate_gemini_response(user_text, news_articles):
 
     try:
         response = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
-        response.raise_for_status()
+        # If non-2xx, raise with body captured
+        if not response.ok:
+            detail = {
+                "upstream_status": response.status_code,
+                "upstream_body": None
+            }
+            try:
+                detail["upstream_body"] = response.text
+            except Exception:
+                pass
+            raise HTTPException(status_code=502, detail=detail)
         
         # Parse the JSON string from the response
         body = response.json()
         candidates = body.get('candidates', [])
         if not candidates:
-            raise HTTPException(status_code=502, detail="AI service returned no candidates.")
+            raise HTTPException(status_code=502, detail={"error": "AI service returned no candidates.", "raw": body})
         parts = candidates[0].get('content', {}).get('parts', [])
         if not parts:
-            raise HTTPException(status_code=502, detail="AI service returned no parts.")
+            raise HTTPException(status_code=502, detail={"error": "AI service returned no parts.", "raw": body})
         json_string = parts[0].get('text', '')
         if not json_string:
-            raise HTTPException(status_code=502, detail="AI service returned empty text.")
+            raise HTTPException(status_code=502, detail={"error": "AI service returned empty text.", "raw": body})
         return json.loads(json_string)
         
     except requests.exceptions.RequestException as e:
-        print(f"Error calling Gemini API: {e}")
-        raise HTTPException(status_code=500, detail="Error communicating with AI service.")
-    except (KeyError, json.JSONDecodeError) as e:
-        print(f"Error parsing Gemini response: {e}")
+        # Network or request error
         try:
-            print(f"Raw Gemini response was: {response.text}")
+            raw = response.text  # type: ignore[name-defined]
         except Exception:
-            pass
-        raise HTTPException(status_code=500, detail="Invalid response from AI service.")
+            raw = None
+        raise HTTPException(status_code=500, detail={"error": "Error communicating with AI service.", "exception": str(e), "raw": raw})
+    except (KeyError, json.JSONDecodeError) as e:
+        try:
+            raw = response.text  # type: ignore[name-defined]
+        except Exception:
+            raw = None
+        raise HTTPException(status_code=500, detail={"error": "Invalid response from AI service.", "exception": str(e), "raw": raw})
