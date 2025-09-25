@@ -888,19 +888,25 @@ with col_main:
             api_base = os.environ.get("MISINFO_API_BASE", "http://127.0.0.1:8000")
             friend_analysis = call_backend_analyze(api_base, target_news)
             friend_ok = isinstance(friend_analysis, dict) and not friend_analysis.get("error")
+            ai_confidence = None
             if friend_ok:
                 try:
                     verdict_ai = friend_analysis.get("verdict", "")
-                    confidence_ai = float(friend_analysis.get("confidence_score", 0))
+                    confidence_ai_raw = friend_analysis.get("confidence_score", None)
+                    try:
+                        ai_confidence = float(confidence_ai_raw) if confidence_ai_raw is not None else None
+                    except Exception:
+                        ai_confidence = None
                     reasons_ai = friend_analysis.get("reasons", [])
-                    st.success(f"🤖 AI Verdict: {verdict_ai} ({confidence_ai:.0f}%)")
+                    st.success(f"🤖 AI Verdict: {verdict_ai}{f' ({ai_confidence:.0f}%)' if ai_confidence is not None else ''}")
                     if reasons_ai:
                         st.caption("Top reasons:")
                         for r in reasons_ai[:3]:
                             st.markdown(f"- {r}")
-                    # Prefer AI confidence for status bar
-                    progress_bar.progress(min(max(confidence_ai, 0), 100) / 100)
-                    status_text.markdown(f"**{confidence_ai:.1f}%** model confidence")
+                    # Prefer AI confidence for status bar when available
+                    if ai_confidence is not None:
+                        progress_bar.progress(min(max(ai_confidence, 0), 100) / 100)
+                        status_text.markdown(f"**{ai_confidence:.1f}%** model confidence")
                 except Exception:
                     pass
 
@@ -913,10 +919,16 @@ with col_main:
                 favor_pct, articles = search_result
                 hoax_context = None
 
+            # Update confidence UI when AI is missing or provided no numeric confidence
+            if not friend_ok or ai_confidence is None:
+                progress_bar.progress(min(max(favor_pct, 0), 100) / 100)
+                status_text.markdown(f"**{favor_pct:.1f}%** source agreement")
+
             # If AI verdict exists, blend display (keep sources list visible)
             if friend_ok:
-                status_text.markdown(f"**{max(favor_pct, friend_analysis.get('confidence_score', 0)):.1f}%** combined confidence")
-            
+                combined = max(favor_pct, ai_confidence if ai_confidence is not None else 0)
+                status_text.markdown(f"**{combined:.1f}%** combined confidence")
+
             if articles:
                 source_list = []
                 for i, article in enumerate(articles[:5], 1):
