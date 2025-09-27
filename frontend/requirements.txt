@@ -1,0 +1,11 @@
+         streamlit
+         requests
+         textblob
+         pandas
+         numpy
+         matplotlib
+         networkx
+         pyvis
+         scikit-learn
+        beautifulsoup4
+        feedparser
