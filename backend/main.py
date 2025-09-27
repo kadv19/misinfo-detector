@@ -16,11 +16,7 @@ app.add_middleware(
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-    )
-    
-    
-    
-    
+)
     #Request to /analyze to get analysed content
 @app.post("/analyze")
 def analyze_news_endpoint(payload: dict):

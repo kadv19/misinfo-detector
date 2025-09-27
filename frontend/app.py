@@ -21,6 +21,12 @@ from io import BytesIO
 import pandas as pd
 import google.generativeai as genai
 
+if 'PORT' in os.environ:
+    port = int(os.environ['PORT'])
+    print(f"Running on Cloud Run port {port}")  # Debug log
+else:
+    port = 8501
+
 # Configure Gemini - Get your FREE API key from ai.google.dev
 if "GEMINI_API_KEY" in os.environ:
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
@@ -1164,7 +1170,11 @@ with st.expander("🔧 Debug & Developer Info"):
     }
     st.json(debug_data)
 
-
+if __name__ == "__main__":
+    # For local testing
+    if 'PORT' not in os.environ:
+        print(f"Running locally on port {port}")
+    # No explicit run here—Streamlit handles via CLI
 
 if __name__ == "__main__":
     # For Cloud Run deployment
