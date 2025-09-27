@@ -19,7 +19,35 @@ import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
 import pandas as pd
-from utils.content import fetch_google_news_rss, get_content_from_link, extract_keywords_gist
+import google.generativeai as genai
+
+# Configure Gemini - Get your FREE API key from ai.google.dev
+if "GEMINI_API_KEY" in os.environ:
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+def extract_keywords_gist(text):
+    """
+    Extracts keywords and a gist from the input news text.
+    Returns: {"keywords": [...], "gist": "..."}
+    """
+    text_lower = text.lower()
+    if "poonam" in text_lower and "pandey" in text_lower:
+        keywords = ["Poonam Pandey", "death", "cervical cancer", "hoax", "Bollywood", "actress"]
+        gist = "Bollywood actress Poonam Pandey's death was a hoax for cancer awareness."
+    elif "vaccine" in text_lower or "covid" in text_lower:
+        keywords = ["vaccine", "covid", "microchip", "conspiracy", "government"]
+        gist = "A conspiracy theory about COVID vaccines and microchips."
+    else:
+        # Fallback: pick 5 most frequent words
+        words = [w.strip('.,!?') for w in text.split() if len(w) > 3]
+        freq = {}
+        for w in words:
+            freq[w] = freq.get(w, 0) + 1
+        keywords = sorted(freq, key=freq.get, reverse=True)[:5]
+        gist = " ".join(text.split()[:15]) + "..."
+    
+    return {"keywords": keywords, "gist": gist}
+
 
 def call_backend_analyze(api_base_url: str, text: str):
     try:
@@ -29,14 +57,51 @@ def call_backend_analyze(api_base_url: str, text: str):
     except Exception as e:
         return {"error": str(e)}
 
-# Cloud Run port support
-if 'PORT' in os.environ:
-    port = int(os.environ['PORT'])
-else:
-    port = 8501
-# Configure Gemini - Get your FREE API key from ai.google.dev
-
-
+def fallback_smart_search(keywords, gist):
+    """Intelligent fallback with realistic mock data"""
+    text_lower = ' '.join(keywords + [gist]).lower()
+    
+    if any(word in text_lower for word in ["poonam", "pandey", "death"]):
+        articles = [
+            {"title": "Poonam Pandey death: Actress's team announces her demise - India Today", "sentiment": 0.7, "source": "India Today"},
+            {"title": "Poonam Pandey death hoax: Actress reveals she's alive - NDTV", "sentiment": -0.8, "source": "NDTV"},
+            {"title": "Why Poonam Pandey faked her death for cancer awareness - The Hindu", "sentiment": -0.6, "source": "The Hindu"},
+            {"title": "Bollywood actress Poonam Pandey passes away at 32 - Times of India", "sentiment": 0.8, "source": "Times of India"},
+            {"title": "Poonam Pandey alive: Death was campaign stunt - Hindustan Times", "sentiment": -0.9, "source": "Hindustan Times"},
+            {"title": "Outrage over Poonam Pandey fake death announcement - The Wire", "sentiment": -0.7, "source": "The Wire"},
+            {"title": "Poonam Pandey death news viral on WhatsApp, fake - Indian Express", "sentiment": -0.5, "source": "Indian Express"},
+            {"title": "Poonam Pandey death was campaign stunt for cancer screening - BBC News", "sentiment": -0.4, "source": "BBC"}
+        ]
+        favor_pct = 25
+        hoax_context = {
+            "status": "ALIVE - CONFIRMED HOAX",
+            "explanation": "Poonam Pandey faked her death on Feb 2, 2024, to raise cervical cancer awareness. She revealed the stunt the next day, urging HPV vaccination and early screening. **Key lesson**: Celebrity death stories spread fast—always check official channels before sharing!",
+            "timestamp": "Last verified: February 2024",
+            "educational_tip": "🚨 **Red Flag**: Emotional celebrity stories + urgent sharing requests often signal manipulation."
+        }
+        return favor_pct, articles, hoax_context
+    
+    elif any(word in text_lower for word in ["vaccine", "microchip", "covid"]):
+        articles = [
+            {"title": "COVID vaccines do not contain microchips, WHO clarifies - Reuters", "sentiment": -0.9, "source": "Reuters"},
+            {"title": "Fact check: Vaccines are safe, no tracking devices - CDC", "sentiment": -0.8, "source": "CDC"},
+            {"title": "Microchip conspiracy theory debunked - BBC", "sentiment": -0.7, "source": "BBC"},
+            {"title": "Vaccine misinformation spreads on social media - The Guardian", "sentiment": -0.6, "source": "The Guardian"},
+            {"title": "Health experts warn against COVID vaccine myths - CNN", "sentiment": -0.8, "source": "CNN"}
+        ]
+        favor_pct = 10
+        return favor_pct, articles, None
+    
+    else:
+        articles = [
+            {"title": f"Breaking: {' '.join(keywords[:3])} confirmed by sources", "sentiment": 0.7, "source": "News1"},
+            {"title": f"Experts question claims about {' '.join(keywords[:2])}", "sentiment": -0.3, "source": "News2"},
+            {"title": f"Official statement on {' '.join(keywords[:2])} released", "sentiment": 0.8, "source": "News3"},
+            {"title": f"{' '.join(keywords[:3])} story developing", "sentiment": 0.1, "source": "News4"},
+            {"title": f"Social media abuzz over {' '.join(keywords[:2])}", "sentiment": 0.4, "source": "News5"}
+        ]
+        favor_pct = 55
+        return favor_pct, articles, None
 
 def real_news_search(keywords, gist):
     """Real Google News search - tuned for relevance"""
@@ -122,7 +187,7 @@ def real_news_search(keywords, gist):
         except Exception:
             pass
         
-        return favor_pct, articles
+        return favor_pct, articles, None
     
     except Exception as e:
         st.warning(f"🌐 Search issue (using smart fallback): {str(e)[:100]}")
@@ -210,14 +275,16 @@ def build_claim_lineage_graph(keywords, verdict, favor_pct, articles, media_flag
         # Render
         net = Network(height="450px", width="100%", directed=True, bgcolor="#1a1a1a")
         net.from_nx(G)
-        net.set_options("""
+        net.set_options(
+        """
         {
           "nodes": {"font": {"size": 14, "color": "#ffffff"}, "borderWidth": 2, "shadow": true},
           "edges": {"arrows": "to", "color": {"inherit": false}, "font": {"size": 10}, "smooth": {"type": "continuous"}},
           "physics": {"enabled": true, "barnesHut": {"springLength": 120}},
           "interaction": {"hover": true, "tooltipDelay": 150}
         }
-        """)
+        """
+        )
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
         net.save_graph(temp_file.name)
         with open(temp_file.name, 'r', encoding='utf-8') as f:
@@ -298,7 +365,6 @@ def generate_lineage_education(verdict, favor_pct, hoax_context=None):
         "• **Click nodes** for detailed analysis and source information"
     ])
     return education_points
-
 
 def analyze_media_evidence(media_inputs):
     """Analyze all uploaded media (images, videos, URLs)"""
@@ -402,54 +468,6 @@ def analyze_web_source(url):
         }
     except:
         return {"url": url, "credibility": 0.2, "summary": "Could not access URL"}
-
- 
-
-def fallback_smart_search(keywords, gist):
-    """Intelligent fallback with realistic mock data"""
-    text_lower = ' '.join(keywords + [gist]).lower()
-    
-    if any(word in text_lower for word in ["poonam", "pandey", "death"]):
-        articles = [
-            {"title": "Poonam Pandey death: Actress's team announces her demise - India Today", "sentiment": 0.7, "source": "India Today"},
-            {"title": "Poonam Pandey death hoax: Actress reveals she's alive - NDTV", "sentiment": -0.8, "source": "NDTV"},
-            {"title": "Why Poonam Pandey faked her death for cancer awareness - The Hindu", "sentiment": -0.6, "source": "The Hindu"},
-            {"title": "Bollywood actress Poonam Pandey passes away at 32 - Times of India", "sentiment": 0.8, "source": "Times of India"},
-            {"title": "Poonam Pandey alive: Death was campaign stunt - Hindustan Times", "sentiment": -0.9, "source": "Hindustan Times"},
-            {"title": "Outrage over Poonam Pandey fake death announcement - The Wire", "sentiment": -0.7, "source": "The Wire"},
-            {"title": "Poonam Pandey death news viral on WhatsApp, fake - Indian Express", "sentiment": -0.5, "source": "Indian Express"},
-            {"title": "Poonam Pandey used fake death for cancer screening - BBC News", "sentiment": -0.4, "source": "BBC"}
-        ]
-        favor_pct = 25
-        hoax_context = {
-            "status": "ALIVE - CONFIRMED HOAX",
-            "explanation": "Poonam Pandey faked her death on Feb 2, 2024, to raise cervical cancer awareness. She revealed the stunt the next day, urging HPV vaccination and early screening. **Key lesson**: Celebrity death stories spread fast—always check official channels before sharing!",
-            "timestamp": "Last verified: February 2024",
-            "educational_tip": "🚨 **Red Flag**: Emotional celebrity stories + urgent sharing requests often signal manipulation."
-        }
-        return favor_pct, articles, hoax_context
-    
-    elif any(word in text_lower for word in ["vaccine", "microchip", "covid"]):
-        articles = [
-            {"title": "COVID vaccines do not contain microchips, WHO clarifies - Reuters", "sentiment": -0.9, "source": "Reuters"},
-            {"title": "Fact check: Vaccines are safe, no tracking devices - CDC", "sentiment": -0.8, "source": "CDC"},
-            {"title": "Microchip conspiracy theory debunked - BBC", "sentiment": -0.7, "source": "BBC"},
-            {"title": "Vaccine misinformation spreads on social media - The Guardian", "sentiment": -0.6, "source": "The Guardian"},
-            {"title": "Health experts warn against COVID vaccine myths - CNN", "sentiment": -0.8, "source": "CNN"}
-        ]
-        favor_pct = 10
-        return favor_pct, articles
-    
-    else:
-        articles = [
-            {"title": f"Breaking: {' '.join(keywords[:3])} confirmed by sources", "sentiment": 0.7, "source": "News1"},
-            {"title": f"Experts question claims about {' '.join(keywords[:2])}", "sentiment": -0.3, "source": "News2"},
-            {"title": f"Official statement on {' '.join(keywords[:2])} released", "sentiment": 0.8, "source": "News3"},
-            {"title": f"{' '.join(keywords[:3])} story developing", "sentiment": 0.1, "source": "News4"},
-            {"title": f"Social media abuzz over {' '.join(keywords[:2])}", "sentiment": 0.4, "source": "News5"}
-        ]
-        favor_pct = 55
-        return favor_pct, articles
 
 def generate_verdict(favor_pct, hoax_context=None, media_flags=None):
     """Enhanced verdict considering all evidence"""
@@ -625,7 +643,7 @@ with st.sidebar:
         default_api_base = None
     if not default_api_base:
         default_api_base = os.environ.get("MISINFO_API_BASE", "http://127.0.0.1:8000")
-    api_base_input = st.text_input("Backend API base", value=default_api_base, help="Your FastAPI backend URL (e.g., https://misinfo-backend-xxxx.a.run.app)")
+    api_base_input = st.text_input("Backend API base", value=default_api_base, help="Your FastAPI backend URL (e.g., https://misinfo-backend-xxxx.a.run.app")
     st.session_state["api_base"] = api_base_input
     
     st.markdown("---")
@@ -644,7 +662,7 @@ with col_main:
     # === INTEGRATED EVIDENCE COLLECTION SECTION ===
     st.markdown('<div class="evidence-section">', unsafe_allow_html=True)
     st.markdown("### 📂 **Evidence Collection** - Add All Available Sources")
-    st.markdown("*The more evidence you provide, the more accurate our analysis!*")
+    st.markdown("*The more evidence you provide, the more accurate our analysis!* ")
 
     # Create tabbed interface for different evidence types
     tab_text, tab_media, tab_urls = st.tabs(["📝 Text Evidence", "🖼️ Media Files", "🔗 Web Sources"])
@@ -740,11 +758,11 @@ with col_main:
     
     if evidence_count == 0:
         st.warning("""
-        👋 **Get Started Tip**: 
+        👋 **Get Started Tip**:  
         Start with text evidence, then add images/videos for stronger analysis!
         
         **💡 Quick Test**: Try the Poonam Pandey hoax case above to see it in action.
-        """)
+        """ )
     else:
         st.info(f"📊 **Evidence Ready**: {evidence_count} pieces collected. Click ANALYZE for unified verdict!")
 
@@ -844,8 +862,7 @@ with col_main:
             if len(search_result) == 3:
                 favor_pct, articles, hoax_context = search_result
             else:
-                favor_pct, articles = search_result
-                hoax_context = None
+                favor_pct, articles, hoax_context = search_result[0], search_result[1], None
 
             # Update confidence UI when AI is missing or provided no numeric confidence
             if not friend_ok or ai_confidence is None:
@@ -911,7 +928,7 @@ with col_main:
             
             if not uploaded_images and not video_url:
                 st.info("ℹ️ **No media uploaded** - Text + source analysis only")
-                st.markdown("*💡 Tip: Upload images/videos for stronger deepfake detection!*")
+                st.markdown("*💡 Tip: Upload images/videos for stronger deepfake detection!* ")
             
             st.markdown("---")
             
@@ -943,14 +960,10 @@ with col_main:
             
             # Show evidence breakdown
             evidence_summary = []
-            if target_news:
-                evidence_summary.append("📝 Text evidence analyzed")
-            if uploaded_images:
-                evidence_summary.append(f"🖼️ {len(uploaded_images)} image(s) scanned")
-            if video_url:
-                evidence_summary.append("🎥 Video URL analyzed")
-            if source_urls:
-                evidence_summary.append(f"🔗 {len([u for u in source_urls.split('\n') if u.strip()])} web source(s)")
+            if target_news: evidence_summary.append("📝 Text evidence analyzed")
+            if uploaded_images: evidence_summary.append(f"🖼️ {len(uploaded_images)} image(s) scanned")
+            if video_url: evidence_summary.append("🎥 Video URL analyzed")
+            if source_urls: evidence_summary.append(f"🔗 {len([u for u in source_urls.split('\n') if u.strip()])} web source(s)")
             
             st.caption(f"**Evidence Base**: {', '.join(evidence_summary)} | **Final Confidence**: {favor_pct:.0f}%")
             
@@ -1043,7 +1056,8 @@ with col_main:
                     • **Red nodes** = Contradicting sources
                     • **Purple nodes** = Known hoax patterns
                     • **Final node** = Your verdict with confidence score
-                    """)
+                    """
+                    )
                 else:
                     st.warning("⚠️ Interactive graph temporarily unavailable")
                     st.info("Graph shows rumor evolution: Origin → Entities → Sources → Verdict")
@@ -1054,9 +1068,9 @@ with col_main:
                 
                 # Simple fallback summary
                 st.markdown("**📊 Quick Lineage Summary:**")
-                st.markdown(f"• **Origin**: Unknown source (WhatsApp/social media)")
+                st.markdown("• **Origin**: Unknown source (WhatsApp/social media)")
                 st.markdown(f"• **Core Claim**: {' '.join(kg['keywords'][:3])}")
-                if articles:
+                if 'articles' in locals() and articles:
                     st.markdown(f"• **Sources**: {len(articles)} analyzed ({sum(1 for a in articles if a['sentiment'] > 0)} supporting)")
                 st.markdown(f"• **Evolution**: {'High-risk mutation path detected' if favor_pct < 40 else 'Stable narrative development'}")
                 st.markdown(f"• **Final**: {verdict} ({favor_pct:.0f}% confidence)")
@@ -1070,19 +1084,20 @@ with col_main:
         • **Action**: Always trace back to primary sources before sharing
         """)
 
-        if hoax_context:
+        if 'hoax_context' in locals() and hoax_context:
             st.info(f"🎭 **Hoax Insight**: {hoax_context.get('explanation', '')[:120]}...")
             # Share functionality
             st.markdown("---")
             if st.button("📤 Share Analysis Summary", type="secondary", use_container_width=True):
                 share_text = f"🔍 Misinfo Detector: {verdict}\n📊 Confidence: {favor_pct:.0f}%\n"
-                if evidence_summary:
+                if 'evidence_summary' in locals() and evidence_summary:
                     share_text += f"📂 Evidence: {', '.join(evidence_summary)}\n"
-                if media_flags:
+                if 'media_flags' in locals() and media_flags:
                     flags = [k.replace('_detected', '').replace('_deepfake', ' deepfake').title() for k, v in media_flags.items() if v]
                     if flags:
                         share_text += f"⚠️ Flags: {', '.join(flags)}\n"
-                share_text += f"💡 {explanation[:100]}..."
+                if 'explanation' in locals() and explanation:
+                    share_text += f"💡 {explanation[:100]}..."
                 
                 st.code(share_text)
 
@@ -1167,7 +1182,7 @@ def generate_mutation_graph(keywords, gist, num_days=5):
 
         for day in range(1, num_days + 1):
             query = ' '.join(keywords[:3]) + f' when:{day}d'
-            daily_articles = real_news_search([query], gist)
+            daily_articles = real_news_search([query], gist) # Pass keywords and gist
             daily_sent = daily_articles[0] if daily_articles[1] else 0.5
             daily_gist = " ".join([a["summary"] for a in daily_articles[1][:2]]) if daily_articles[1] else ""
             daily_vec = vectorizer.transform([daily_gist.lower()])
@@ -1208,6 +1223,7 @@ def generate_mutation_graph(keywords, gist, num_days=5):
     except Exception as e:
         st.error(f"Mutation graph error: {e}")
         return None, [], [], []
+
 
 def display_mutation_graph(mutation_data):
     """Display the mutation graph in app"""
@@ -1260,7 +1276,8 @@ def render_mutation_tree(tree_data):
         
         net = Network(height="500px", width="100%", directed=True, layout=True)
         net.from_nx(G)
-        net.set_options("""
+        net.set_options(
+        """
         {
           "layout": {
             "hierarchical": {
@@ -1276,7 +1293,8 @@ def render_mutation_tree(tree_data):
           "physics": {"enabled": false},
           "interaction": {"hover": true, "clickToUse": true}
         }
-        """)
+        """
+        )
         
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".html")
         net.save_graph(temp_file.name)
@@ -1320,7 +1338,7 @@ def generate_mutation_tree_data(keywords, gist, num_days=5):
         
         for day in range(1, num_days + 1):
             query = ' '.join(keywords[:3]) + f' when:{day}d'
-            daily_result = real_news_search(keywords, gist.replace('when:', ''))
+            daily_result = real_news_search(keywords, gist.replace('when:', '')) # Pass keywords and gist
             daily_articles = daily_result[1] if len(daily_result) > 1 else []
             
             if not daily_articles:
@@ -1394,4 +1412,3 @@ if 'kg' in locals() and kg and "keywords" in kg and "gist" in kg:
             st.info("No mutations detected - claim appears stable.")
 else:
     st.info("Run an analysis above to view the mutation tree.")
-

@@ -47,25 +47,3 @@ def get_content_from_link(url):
     except Exception as e:
         print(f"An unexpected error occurred while scraping {url}: {e}")
         return "Could not fetch content."
-
-def extract_keywords_gist(text):
-    """
-    Extracts keywords and a gist from the input news text.
-    Returns: {"keywords": [...], "gist": "..."}
-    """
-    text_lower = text.lower()
-    if "poonam" in text_lower and "pandey" in text_lower:
-        keywords = ["Poonam Pandey", "death", "cervical cancer", "hoax", "Bollywood", "actress"]
-        gist = "Bollywood actress Poonam Pandey's death was a hoax for cancer awareness."
-    elif "vaccine" in text_lower or "covid" in text_lower:
-        keywords = ["vaccine", "covid", "microchip", "conspiracy", "government"]
-        gist = "A conspiracy theory about COVID vaccines and microchips."
-    else:
-        # Fallback: pick 5 most frequent words
-        words = [w.strip('.,!?') for w in text.split() if len(w) > 3]
-        freq = {}
-        for w in words:
-            freq[w] = freq.get(w, 0) + 1
-        keywords = sorted(freq, key=freq.get, reverse=True)[:5]
-        gist = " ".join(text.split()[:15]) + "..."
-    return {"keywords": keywords, "gist": gist}
