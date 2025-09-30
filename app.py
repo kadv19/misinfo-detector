@@ -24,23 +24,11 @@ import google.generativeai as genai
 from friend_logic.utils.api import generate_gemini_response
 from friend_logic.utils.content import fetch_google_news_rss
 
-# Early Streamlit server config for Cloud Run
+# Early environment setup for debugging (optional, can be removed if unused)
 if 'PORT' in os.environ:
-    os.environ['SERVER_PORT'] = os.environ['PORT']
-    os.environ['SERVER_ADDRESS'] = '0.0.0.0'
-    print(f"Early binding to port {os.environ['PORT']}")
-
-# Cloud Run port detection and binding using runtime config
-if 'PORT' in os.environ:
-    port = int(os.environ['PORT'])
-    print(f"Running on Cloud Run port {port}")  # Debug log
-    st.runtime.set_config_option('server.port', port)
-    st.runtime.set_config_option('server.address', '0.0.0.0')
+    print(f"Running on Cloud Run port {os.environ['PORT']}")
 else:
-    port = 8501
-    print(f"Running locally on port {port}")
-    st.runtime.set_config_option('server.port', port)
-    st.runtime.set_config_option('server.address', '127.0.0.1')  # Localhost for safety
+    print(f"Running locally on default port 8501")
 
 # Configure Gemini - Get your FREE API key from ai.google.dev
 if "GEMINI_API_KEY" in os.environ:
