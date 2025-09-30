@@ -2,6 +2,10 @@ from fastapi import HTTPException
 import requests
 import json
 from .content import get_content_from_link
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 #API KEY DECLARATION
 GEMINI_API_KEY = "AIzaSyDH06vyJHu3GpKWg2Hqjp-on0vD4mjjI7o"
@@ -9,6 +13,7 @@ GEMINI_API_KEY = "AIzaSyDH06vyJHu3GpKWg2Hqjp-on0vD4mjjI7o"
 
 #Function definition
 def generate_gemini_response(user_text, news_articles):
+    logger.debug(f"Generating response for target: {user_text[:50]}... related: {len(news_articles)} items")
     api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key={GEMINI_API_KEY}"
     
     # Construct a detailed prompt
@@ -90,12 +95,14 @@ def generate_gemini_response(user_text, news_articles):
         
         # Parse the JSON string from the response
         json_string = response.json()['candidates'][0]['content']['parts'][0]['text']
+        logger.debug("Gemini response generated successfully")
         return json.loads(json_string)
         
     except requests.exceptions.RequestException as e:
-        print(f"Error calling Gemini API: {e}")
-        raise HTTPException(status_code=500, detail="Error communicating with AI service.")
+        logger.error(f"AI service error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error communicating with AI service: {str(e)}")
     except (KeyError, json.JSONDecodeError) as e:
+        logger.error(f"AI service error: {str(e)}")
         print(f"Error parsing Gemini response: {e}")
         print(f"Raw Gemini response was: {response.text}")
         raise HTTPException(status_code=500, detail="Invalid response from AI service.")
