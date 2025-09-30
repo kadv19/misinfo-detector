@@ -9,3 +9,4 @@
          scikit-learn
         beautifulsoup4
         feedparser
+        google-generative-ai
