@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy app
 COPY . .
 
+# Expose dynamic port
 EXPOSE $PORT
 
-# Start with explicit Streamlit binding
-CMD ["streamlit", "run", "app.py", "--server.port=$PORT", "--server.address=0.0.0.0", "--server.headless=true", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
+# CMD with explicit Streamlit binding to $PORT and 0.0.0.0
+CMD streamlit run app.py --server.port=$$PORT --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false
