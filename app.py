@@ -2,6 +2,7 @@ import streamlit as st
 from textblob import TextBlob
 import json
 import feedparser
+from text_analyzer import analyze_text, get_verdict
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -20,6 +21,8 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import pandas as pd
 import google.generativeai as genai
+from friend_logic.utils.api import generate_gemini_response
+from friend_logic.utils.content import fetch_google_news_rss
 
 # Cloud Run port detection and binding
 if 'PORT' in os.environ:
@@ -108,7 +111,7 @@ def fallback_smart_search(keywords, gist):
             {"title": f"Breaking: {' '.join(keywords[:3])} confirmed by sources", "sentiment": 0.7, "source": "News1"},
             {"title": f"Experts question claims about {' '.join(keywords[:2])}", "sentiment": -0.3, "source": "News2"},
             {"title": f"Official statement on {' '.join(keywords[:2])} released", "sentiment": 0.8, "source": "News3"},
-            {"title": f"{' '.join(keywords[:3])} story developing", "sentiment": 0.1, "source": "News4"},
+            {"title": f"{'. '.join(keywords[:3])} story developing", "sentiment": 0.1, "source": "News4"},
             {"title": f"Social media abuzz over {' '.join(keywords[:2])}", "sentiment": 0.4, "source": "News5"}
         ]
         favor_pct = 55
@@ -170,9 +173,15 @@ def real_news_search(keywords, gist):
         
         if articles:
             positive = sum(1 for a in articles if a["sentiment"] > 0.1)
+            neutral = sum(1 for a in articles if -0.1 <= a["sentiment"] <= 0.1)
+            negative = len(articles) - positive - neutral
             favor_pct = (positive / len(articles)) * 100
+            if neutral > positive:
+                favor_pct = max(0, favor_pct - 20)  # Penalize neutral (e.g., tragedies)
+            if negative > positive:
+                favor_pct = max(0, favor_pct - 30)  # Heavy penalty for negative
         else:
-            favor_pct = 25
+            favor_pct = 25  # Default low for no sources (not 100%)
         
         # Corroboration boost: if many relevant reputable sources match the claim, raise confidence
         try:
@@ -800,317 +809,47 @@ with col_main:
         
         # Run comprehensive analysis
         with st.spinner("🤖 Analyzing all evidence... This may take 30-60 seconds"):
-            # Step 1: Text Analysis
-            st.markdown("### 📝 Step 1: Text Evidence Analysis")
-            kg = extract_keywords_gist(target_news)
-            
-            # Insert triggers like 'death' at the front if present in text
-            triggers = ["death", "died", "hoax", "fake"]
-            text_lower = target_news.lower()
-            existing_keywords_lower = [k.lower() for k in kg["keywords"]]
-            for trig in triggers[::-1]:
-                if trig in text_lower and trig not in existing_keywords_lower:
-                    kg["keywords"].insert(0, trig)
-                    existing_keywords_lower.insert(0, trig)
-            
-            col_k1, col_k2 = st.columns([2, 1])
-            with col_k1:
-                st.markdown("**Key Entities Extracted:**")
-                for i, kw in enumerate(kg["keywords"][:5], 1):
-                    st.markdown(f"{i}. **{kw}**")
-            
-            with col_k2:
-                st.markdown("**Core Claim:**")
-                st.markdown(f"**{kg['gist']}**")
-                st.markdown(f"**Time:** {datetime.now().strftime('%H:%M:%S')}")
-            
-            st.markdown("---")
-            
-            # Step 2: Source Intelligence
-            st.markdown("### 📰 Step 2: Source & Web Analysis")
-            col_pct, col_sources = st.columns([1, 2])
-            
-            with col_pct:
-                st.markdown("**Source Consensus:**")
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-            
-            with col_sources:
-                st.markdown("**Sources Found:**")
-                sources_placeholder = st.empty()
+            # Step 1: Fetch related news from Google News
+            related_news = fetch_google_news_rss(target_news, max_results=10)
 
-            # Friend's backend analysis (primary)
-            api_base = st.session_state.get("api_base") or os.environ.get("MISINFO_API_BASE", "http://127.0.0.1:8000")
-            friend_analysis = call_backend_analyze(api_base, target_news)
-            friend_ok = isinstance(friend_analysis, dict) and not friend_analysis.get("error")
-            ai_confidence = None
-            if friend_ok:
-                try:
-                    verdict_ai = friend_analysis.get("verdict", "")
-                    confidence_ai_raw = friend_analysis.get("confidence_score", None)
-                    try:
-                        ai_confidence = float(confidence_ai_raw) if confidence_ai_raw is not None else None
-                    except Exception:
-                        ai_confidence = None
-                    reasons_ai = friend_analysis.get("reasons", [])
-                    st.success(f"🤖 AI Verdict: {verdict_ai}{f' ({ai_confidence:.0f}%)' if ai_confidence is not None else ''}")
-                    if reasons_ai:
-                        st.caption("Top reasons:")
-                        for r in reasons_ai[:3]:
-                            st.markdown(f"- {r}")
-                    # Prefer AI confidence for status bar when available
-                    if ai_confidence is not None:
-                        progress_bar.progress(min(max(ai_confidence, 0), 100) / 100)
-                        status_text.markdown(f"**{ai_confidence:.1f}%** model confidence")
-                except Exception:
-                    pass
-            if not friend_ok:
-                st.warning(f"AI service unavailable: {friend_analysis.get('error','Unknown error')}")    
-
-            # Run text source search (fallback/augment)
-            search_result = real_news_search(kg["keywords"], kg["gist"])
-            
-            if len(search_result) == 3:
-                favor_pct, articles, hoax_context = search_result
+            # Step 2: Pass the user text and related news to Gemini for analysis
+            if not related_news:
+                response_data = generate_gemini_response(target_news, [])
             else:
-                favor_pct, articles, hoax_context = search_result[0], search_result[1], None
+                response_data = generate_gemini_response(target_news, related_news)
 
-            # Update confidence UI when AI is missing or provided no numeric confidence
-            if not friend_ok or ai_confidence is None:
-                progress_bar.progress(min(max(favor_pct, 0), 100) / 100)
-                status_text.markdown(f"**{favor_pct:.1f}%** source agreement")
+            # Step 3: Display the results
+            st.markdown("### 🎯 UNIFIED EVIDENCE VERDICT")
 
-            # If AI verdict exists, blend display (keep sources list visible)
-            if friend_ok:
-                combined = max(favor_pct, ai_confidence if ai_confidence is not None else 0)
-                status_text.markdown(f"**{combined:.1f}%** combined confidence")
+            verdict = response_data.get("verdict", "N/A")
+            confidence_score = response_data.get("confidence_score", 0)
+            reasons = response_data.get("reasons", [])
+            what_would_change = response_data.get("what_would_change", "")
+            lineage_graph = response_data.get("lineage_graph", {})
+            confidence_score_calculation = response_data.get("confidence_score_calculation", "")
 
-            if articles:
-                source_list = []
-                for i, article in enumerate(articles[:5], 1):
-                    sentiment_icon = "✅" if article["sentiment"] > 0 else "❌"
-                    source_list.append(f"{i}. {sentiment_icon} **{article['title']}**")
-                    source_list.append(f"   _{article['source']} | {article['sentiment']:.1f}_")
-                
-                sources_placeholder.markdown("\n".join(source_list))
-                st.caption(f"📊 Analyzed **{len(articles)}** sources from Google News")
-            else:
-                sources_placeholder.warning("No sources found - limited data available")
+            verdict_class = "verdict-true" if "Likely Credible" in verdict else "verdict-warning" if "Conflicting" in verdict else "verdict-danger"
+            st.markdown(f'<div class="{verdict_class}">{verdict}</div>', unsafe_allow_html=True)
+            st.markdown(f"**Confidence Score:** {confidence_score}%")
             
-            # Web source analysis if provided
-            if 'source_urls' in locals() and source_urls:
-                st.markdown("**🔗 Web Sources:**")
-                urls = [url.strip() for url in source_urls.split('\n') if url.strip()]
-                for url in urls[:2]:  # First 2 URLs
-                    web_result = analyze_web_source(url)
-                    cred_icon = "🟢" if web_result["credibility"] > 0.6 else "🟡" if web_result["credibility"] > 0.3 else "🔴"
-                    st.markdown(f"{cred_icon} **{url[:50]}...** - {web_result['summary']}")
-            
-            st.markdown("---")
-            
-            # Step 3: Media Analysis
-            st.markdown("### 🖼️ Step 3: Media Evidence Analysis")
-            media_flags, media_results = analyze_media_evidence(media_inputs)
-            
-            if uploaded_images:
-                st.markdown("**📸 Image Analysis:**")
-                for i, img_file in enumerate(uploaded_images[:2]):
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        image = Image.open(img_file)
-                        st.image(image, caption=f"Image {i+1}: {img_file.name}", use_column_width=True)
-                    with col2:
-                        if "image" in media_results:
-                            img_analysis = media_results["image"]
-                            if img_analysis.get("is_ai_generated", False):
-                                st.error(f"🚨 **Image {i+1}: AI-Generated**")
-                                st.caption(f"Confidence: {img_analysis.get('confidence', 0):.1%}")
-                            else:
-                                st.success(f"✅ **Image {i+1}: Appears Authentic**")
-            
-            if video_url:
-                st.markdown("**🎥 Video Analysis:**")
-                if "video" in media_results:
-                    video_analysis = media_results["video"]
-                    if video_analysis.get("is_deepfake", False):
-                        st.error(f"🚨 **Video: Deepfake Detected**")
-                    else:
-                        st.info(f"✅ **Video: Appears Authentic**")
-            
-            if not uploaded_images and not video_url:
-                st.info("ℹ️ **No media uploaded** - Text + source analysis only")
-                st.markdown("*💡 Tip: Upload images/videos for stronger deepfake detection!* ")
-            
-            st.markdown("---")
-            
-            # Step 4: Unified Evidence Verdict
-            st.markdown("### 🎯 Step 4: UNIFIED EVIDENCE VERDICT")
+            st.markdown("**Reasons:**")
+            for reason in reasons:
+                st.markdown(f"- {reason}")
 
-            # Prefer friend's AI verdict if available
-            if friend_ok:
-                final_conf = float(friend_analysis.get("confidence_score", favor_pct))
-                final_verdict_text = friend_analysis.get("verdict", "")
-                verdict = f"{final_verdict_text}"
-                favor_pct = final_conf
-            else:
-                verdict, explanation = generate_verdict(favor_pct, hoax_context, media_flags)
-                # Color-coded verdict box
-                verdict_class = "verdict-true" if "TRUE" in verdict else "verdict-warning" if "UNCERTAIN" in verdict or "SUSPICIOUS" in verdict else "verdict-danger"
-                st.markdown(f'<div class="{verdict_class}">{verdict}</div>', unsafe_allow_html=True)
-                st.markdown(f"**_{explanation}_**")
+            st.markdown("**What Would Change the Verdict:**")
+            st.markdown(what_would_change)
 
-            if friend_ok:
-                verdict_class = "verdict-true" if any(x in verdict.upper() for x in ["TRUE", "LIKELY CREDIBLE"]) else "verdict-danger" if any(x in verdict.upper() for x in ["FAKE", "MISINFORMATION", "HIGH LIKELIHOOD"]) else "verdict-warning"
-                st.markdown(f'<div class="{verdict_class}">{verdict}</div>', unsafe_allow_html=True)
-                st.caption(f"Confidence: {favor_pct:.0f}%")
-                reasons_ai = friend_analysis.get("reasons", [])
-                if reasons_ai:
-                    st.markdown("**Why:**")
-                    for r in reasons_ai[:5]:
-                        st.markdown(f"- {r}")
-            
-            # Show evidence breakdown
-            evidence_summary = []
-            if target_news: evidence_summary.append("📝 Text evidence analyzed")
-            if uploaded_images: evidence_summary.append(f"🖼️ {len(uploaded_images)} image(s) scanned")
-            if video_url: evidence_summary.append("🎥 Video URL analyzed")
-            if source_urls: evidence_summary.append(f"🔗 {len([u for u in source_urls.split('\n') if u.strip()])} web source(s)")
-            
-            st.caption(f"**Evidence Base**: {', '.join(evidence_summary)} | **Final Confidence**: {favor_pct:.0f}%")
-            
-            # Hoax alert
-            if hoax_context and "HOAX" in verdict:
-                st.markdown(f'<div class="hoax-alert">🚨 **CONFIRMED HOAX CASE**</div>', unsafe_allow_html=True)
-                st.info(hoax_context.get("explanation", "This is a documented misinformation case."))
-            
-            st.markdown("---")
-            
-            # Step 5: Integrated Education
-            st.markdown("### 🎓 Step 5: VERIFICATION GUIDE")
-            reasons = get_educational_reasons(verdict, kg["keywords"], favor_pct, hoax_context, media_flags)
-            
-            for i, reason in enumerate(reasons, 1):
-                st.markdown(f'<div class="edu-tip">{reason}</div>', unsafe_allow_html=True)
-            
-            # Actionable next steps
-            st.markdown("### 🚀 **YOUR ACTION PLAN**")
-            action_items = {
-                "✅ HIGH CONFIDENCE: TRUE": "✅ **SHARE** this story with proper context and sources.",
-                "✅ LIKELY TRUE": "⏳ **MONITOR** for official confirmation in next 24 hours.",
-                "⚠️ UNCERTAIN - VERIFY": "🔍 **VERIFY** with primary sources before sharing.",
-                "⚠️ SUSPICIOUS": "⏸️ **PAUSE** - Ask trusted contacts if they've seen confirmation.",
-                "❌ HIGH RISK: LIKELY FAKE": "🚫 **STOP** the spread - Reply with 'Please verify first!'",
-                "❌ CONFIRMED HOAX": "📚 **EDUCATE** others - Share this analysis to prevent future spread!"
-            }
-            
-            st.markdown(f"**{action_items.get(verdict, '📊 **ANALYZE** more examples to build your detection skills!')}**")
-            
-            st.markdown("---")
-            
-            # Step 6: Evidence Lineage
-            st.markdown("### 🌳 Step 6: EVIDENCE LINEAGE")
-            lineage = create_lineage_visualization(kg["keywords"], verdict, favor_pct, media_flags)
-            
-            col_l1, col_l2 = st.columns(2)
-            with col_l1:
-                st.markdown("**Evidence Flow:**")
-                for step in lineage:
-                    confidence_bar = "█" * int(step["confidence"]/10) + "░" * (10 - int(step["confidence"]/10))
-                    st.markdown(f"• **{step['node']}** → {step['type']}")
-                    st.caption(f"  {confidence_bar} {step['confidence']}%")
-            
-            with col_l2:
-                st.markdown("**Risk Assessment:**")
-                if favor_pct < 40:
-                    st.error("🔴 **HIGH RISK** - Multiple red flags detected")
-                elif favor_pct < 60:
-                    st.warning("🟡 **MEDIUM RISK** - Some concerns remain")
-                else:
-                    st.success("🟢 **LOW RISK** - Evidence appears consistent")
-                
-                st.markdown(f"**Overall Confidence**: {favor_pct:.0f}/100")
-                if media_flags:
-                    st.caption(f"**Media Impact**: {sum([v for v in media_flags.values() if v])} red flags found")
-            
-            st.success("🎉 **FULL EVIDENCE ANALYSIS COMPLETE!** You're now better equipped to spot misinformation.")
-        # === ADD INTERACTIVE LINEAGE GRAPH EXPANDER ===
-        st.markdown("---")
+            st.markdown("**How Confidence Score was Calculated:**")
+            st.markdown(confidence_score_calculation)
 
-        # Interactive Lineage Graph Expander
-        with st.expander("🔍 **View Interactive Rumor Evolution Graph**", expanded=False):
-            st.markdown("**🕸️ Claim Lineage Network** - Click nodes to explore connections")
-            
-            try:
-                # Build the interactive graph
-                graph_html = build_claim_lineage_graph(
-                    kg["keywords"], 
-                    verdict, 
-                    favor_pct, 
-                    articles[:4],  # Limit to 4 sources for cleaner graph
-                    media_flags if 'media_flags' in locals() else None, 
-                    hoax_context if 'hoax_context' in locals() else None
-                )
-                
-                if graph_html:
-                    st.components.v1.html(
-                        graph_html, 
-                        height=450,
-                        width=800,
-                        scrolling=True
-                    )
-                    st.success("✅ **Interactive Graph Active!** Hover nodes for details, drag to explore.")
-                    st.caption("""
-                    💡 **How to Read:**
-                    • **Red nodes** = Unknown origins (highest risk)
-                    • **Blue nodes** = Key entities extracted by AI  
-                    • **Green nodes** = Supporting news sources
-                    • **Red nodes** = Contradicting sources
-                    • **Purple nodes** = Known hoax patterns
-                    • **Final node** = Your verdict with confidence score
-                    """
-                    )
-                else:
-                    st.warning("⚠️ Interactive graph temporarily unavailable")
-                    st.info("Graph shows rumor evolution: Origin → Entities → Sources → Verdict")
-                    
-            except Exception as e:
-                st.error(f"Graph build error: {e}")  # Terminal debug
-                st.info("Using text-based lineage summary...")
-                
-                # Simple fallback summary
-                st.markdown("**📊 Quick Lineage Summary:**")
-                st.markdown("• **Origin**: Unknown source (WhatsApp/social media)")
-                st.markdown(f"• **Core Claim**: {' '.join(kg['keywords'][:3])}")
-                if 'articles' in locals() and articles:
-                    st.markdown(f"• **Sources**: {len(articles)} analyzed ({sum(1 for a in articles if a['sentiment'] > 0)} supporting)")
-                st.markdown(f"• **Evolution**: {'High-risk mutation path detected' if favor_pct < 40 else 'Stable narrative development'}")
-                st.markdown(f"• **Final**: {verdict} ({favor_pct:.0f}% confidence)")
-
-        # Add basic lineage education
-        st.markdown("### 🎓 **What This Lineage Tells You**")
-        st.markdown("""
-        • **Low Source Agreement** (<40%) = Classic hoax pattern  
-        • **Media Red Flags** = Visual manipulation likely
-        • **Known Hoax Match** = This exact story debunked before
-        • **Action**: Always trace back to primary sources before sharing
-        """)
-
-        if 'hoax_context' in locals() and hoax_context:
-            st.info(f"🎭 **Hoax Insight**: {hoax_context.get('explanation', '')[:120]}...")
-            # Share functionality
-            st.markdown("---")
-            if st.button("📤 Share Analysis Summary", type="secondary", use_container_width=True):
-                share_text = f"🔍 Misinfo Detector: {verdict}\n📊 Confidence: {favor_pct:.0f}%\n"
-                if 'evidence_summary' in locals() and evidence_summary:
-                    share_text += f"📂 Evidence: {', '.join(evidence_summary)}\n"
-                if 'media_flags' in locals() and media_flags:
-                    flags = [k.replace('_detected', '').replace('_deepfake', ' deepfake').title() for k, v in media_flags.items() if v]
-                    if flags:
-                        share_text += f"⚠️ Flags: {', '.join(flags)}\n"
-                if 'explanation' in locals() and explanation:
-                    share_text += f"💡 {explanation[:100]}..."
-                
-                st.code(share_text)
+            st.markdown("### 🌳 Evidence Lineage")
+            if lineage_graph:
+                st.markdown(f"**Claim:** {lineage_graph.get('claim', '')}")
+                for conn in lineage_graph.get("connections", []):
+                    st.markdown(f"- **Source:** {conn.get('source', '')}")
+                    st.markdown(f"  - **Title:** {conn.get('title', '')}")
+                    st.markdown(f"  - **Link Type:** {conn.get('link_type', '')}")
+                    st.markdown(f"  - **URL:** {conn.get('url', '')}")
 
 # Results column - Dashboard
 with col_results:
@@ -1428,3 +1167,6 @@ if 'kg' in locals() and kg and "keywords" in kg and "gist" in kg:
             st.info("No mutations detected - claim appears stable.")
 else:
     st.info("Run an analysis above to view the mutation tree.")
+
+
+    

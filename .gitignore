@@ -10,6 +10,7 @@ testenv/
 .venv/
 venv/
 ENV/
+friend_repo/
 
 # OS/Editor
 .DS_Store

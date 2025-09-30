@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from utils.api import generate_gemini_response
-from utils.content import fetch_google_news_rss
+from .utils.api import generate_gemini_response
+from .utils.content import fetch_google_news_rss
      
     
      
