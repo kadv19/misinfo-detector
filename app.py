@@ -24,6 +24,12 @@ import google.generativeai as genai
 from friend_logic.utils.api import generate_gemini_response
 from friend_logic.utils.content import fetch_google_news_rss
 
+# Early Streamlit server config for Cloud Run
+if 'PORT' in os.environ:
+    os.environ['SERVER_PORT'] = os.environ['PORT']
+    os.environ['SERVER_ADDRESS'] = '0.0.0.0'
+    print(f"Early binding to port {os.environ['PORT']}")
+
 # Cloud Run port detection and binding
 if 'PORT' in os.environ:
     port = int(os.environ['PORT'])
@@ -1169,5 +1175,9 @@ if 'kg' in locals() and kg and "keywords" in kg and "gist" in kg:
             st.info("No mutations detected - claim appears stable.")
 else:
     st.info("Run an analysis above to view the mutation tree.")
+
+# Force Streamlit config
+st.runtime.set_config_option('server.port', port if 'PORT' in os.environ else 8501)
+st.runtime.set_config_option('server.address', '0.0.0.0')
 
 
