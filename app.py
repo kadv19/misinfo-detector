@@ -1116,8 +1116,9 @@ def generate_mutation_tree_data(keywords, gist, num_days=5):
                     'url': daily_articles[0].get('url', '') if daily_articles else ''
                 })
                 mutation_type = "High Similarity (Stable)" if sim_score >= 0.95 else f"Mutation: Sentiment flip ({daily_sent - prev_sentiment:.1f})"
+                from_node = 'root' if day == 1 else f"day_{int(child['id'].split('_')[1]) - 1}"
                 tree_data['edges'].append({
-                    'from': 'root' if day == 1 else f'day_{int(child['id'].split('_')[1])-1}',
+                    'from': from_node,
                     'to': f'day_{day}',
                     'label': mutation_label + f" | {mutation_type}"
                 })
@@ -1151,7 +1152,8 @@ if 'kg' in locals() and kg and "keywords" in kg and "gist" in kg:
             for child in tree_data['children']:
                 net.add_node(child['id'], label=child['label'], title=child['title'], 
                              color=child['color'], size=20)
-                net.add_edge("root" if child['id'] == "day_1" else f"day_{int(child['id'].split('_')[1])-1}", 
+                from_node = "root" if child['id'] == "day_1" else f"day_{int(child['id'].split('_')[1]) - 1}"
+                net.add_edge(from_node,
                              child['id'], 
                              label="", 
                              color="#95a5a6", 
