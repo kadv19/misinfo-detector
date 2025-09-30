@@ -30,16 +30,17 @@ if 'PORT' in os.environ:
     os.environ['SERVER_ADDRESS'] = '0.0.0.0'
     print(f"Early binding to port {os.environ['PORT']}")
 
-# Cloud Run port detection and binding
+# Cloud Run port detection and binding using runtime config
 if 'PORT' in os.environ:
     port = int(os.environ['PORT'])
     print(f"Running on Cloud Run port {port}")  # Debug log
-    # Explicitly bind Streamlit to the port and all interfaces
-    st.server.port = port
-    st.server.address = '0.0.0.0'
+    st.runtime.set_config_option('server.port', port)
+    st.runtime.set_config_option('server.address', '0.0.0.0')
 else:
     port = 8501
     print(f"Running locally on port {port}")
+    st.runtime.set_config_option('server.port', port)
+    st.runtime.set_config_option('server.address', '127.0.0.1')  # Localhost for safety
 
 # Configure Gemini - Get your FREE API key from ai.google.dev
 if "GEMINI_API_KEY" in os.environ:
