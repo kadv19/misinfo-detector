@@ -1,12 +1,12 @@
-         streamlit
-         requests
-         textblob
-         pandas
-         numpy
-         matplotlib
-         networkx
-         pyvis
-         scikit-learn
-        beautifulsoup4
-        feedparser
-        google-generative-ai
+streamlit
+requests
+textblob
+pandas
+numpy
+matplotlib
+networkx
+pyvis
+scikit-learn
+beautifulsoup4
+feedparser
+google-generativeai==0.7.2
