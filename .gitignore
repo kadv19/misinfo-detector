@@ -1,0 +1,8 @@
+# env / secrets
+backend/.env
+frontend/.env
+image-detection/.env
+# node_modules/build artifacts
+frontend/node_modules
+image-detection/node_modules
+backend/.venv
