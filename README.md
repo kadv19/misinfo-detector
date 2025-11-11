@@ -1,2 +1,0 @@
-# misinfo-detector
-google
