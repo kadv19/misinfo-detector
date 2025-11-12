@@ -6,3 +6,15 @@ image-detection/.env
 frontend/node_modules
 image-detection/node_modules
 backend/.venv
+# Virtualenvs and pyenv files
+venv/
+.env
+backend/.env
+frontend/.env
+image-detection/.env
+backend/.venv
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
