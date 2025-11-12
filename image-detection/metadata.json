@@ -1,0 +1,5 @@
+{
+  "name": "AURA: Image Authenticity Analyzer",
+  "description": "An AI-powered application to analyze images for authenticity and verify user-provided context. AURA determines if an image is AI-generated or photographic and fact-checks the accompanying claims.",
+  "requestFramePermissions": []
+}

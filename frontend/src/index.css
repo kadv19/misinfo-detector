@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* === GLOBAL STYLES === */
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: 'Piazzolla', sans-serif;
+  background-color: #000;
+  color: #fff;
+  overflow-x: hidden;
+}
+
+/* Smooth transitions */
+* {
+  transition: all 0.25s ease-in-out;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #f97316, #b45309);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #fb923c, #ea580c);
+}
+
+/* Glass Card Effect - Lighter & More Transparent */
+.glass {
+  background: rgba(255, 255, 255, 0.432); /* more transparent */
+  backdrop-filter: blur(6px);          /* lighter blur */
+  border: 1px solid rgba(255, 255, 255, 0.2); /* subtle outline */
+  border-radius: 1rem;                 /* smooth corners */
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2); /* subtle depth */
+}
+
+/* Glass Button Effect */
+.glass-btn {
+  background: rgba(255, 255, 255, 0.349);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.295);
+  color: black;
+  font-weight: bold;
+  border-radius: 1rem;
+  padding: 1.5rem 2.5rem;
+  font-size: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  transition: all 0.3s ease-in-out;
+}
+
+.glass-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.05);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+}
+
+/* Orange-Black Gradient Background */
+.gradient-bg {
+  background: linear-gradient(to bottom, #ff7b00, #000);
+}
+
+/* Button Glow Effect */
+.btn-glow:hover {
+  box-shadow: 0 0 15px rgba(249, 115, 22, 0.6);
+}
